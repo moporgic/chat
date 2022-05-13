@@ -7,11 +7,61 @@
 #include <mutex>
 #include <memory>
 #include <functional>
+#include <chrono>
+#include <ctime>
+#include <iomanip>
 #include <boost/asio.hpp>
 #include <boost/format.hpp>
 #include <boost/algorithm/string.hpp>
 
 using boost::asio::ip::tcp;
+
+class logger {
+public:
+	std::string current_time() const {
+		std::chrono::system_clock::time_point tp = std::chrono::system_clock::now();
+
+		time_t raw_time = std::chrono::system_clock::to_time_t(tp);
+
+		std::tm* timeinfo = std::localtime(&raw_time);
+		std::chrono::milliseconds ms = std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch());
+
+		std::stringstream ss;
+		ss << std::put_time(timeinfo, "%Y-%m-%d %H:%M:%S.") << std::setfill('0') << std::setw(3) << (ms.count() % 1000);
+		return ss.str();
+	}
+
+	void log(const std::string& msg) const {
+		std::string info = current_time();
+		info.reserve(info.size() + msg.size() + 10);
+		info += ' ';
+		info += msg;
+		std::cerr << info << std::flush;
+	}
+
+	class ostream_adapter {
+	public:
+		ostream_adapter(logger& logref) : logref(logref) {}
+		ostream_adapter(const ostream_adapter&) = delete;
+		ostream_adapter(ostream_adapter&&) = default;
+		~ostream_adapter() { logref.log(buf.str()); }
+
+		template<typename type>
+		std::ostream& operator <<(const type& t) { return buf << t; }
+	private:
+		logger& logref;
+		std::stringstream buf;
+	};
+
+	template<typename type>
+	ostream_adapter operator<<(const type& t) {
+		ostream_adapter out(*this);
+		out << t;
+		return out;
+	}
+
+private:
+} logger;
 
 class session: public std::enable_shared_from_this<session> {
 public:
@@ -19,7 +69,7 @@ public:
 
 	void start() {
 		tcp::endpoint endpoint = socket_.remote_endpoint();
-		std::cerr << "session opened: " << endpoint.address() << ':' << endpoint.port() << std::endl;
+		logger << "session opened: " << name() << ' ' << endpoint.address() << ':' << endpoint.port() << std::endl;
 
 		for (auto sess : super_->list_sessions()) {
 			sess->ostream() << "# client " << this->name() << " logged in" << std::endl;
@@ -48,7 +98,11 @@ public:
 		ostream_adapter(std::shared_ptr<session> self) : self(self) {}
 		ostream_adapter(const ostream_adapter&) = delete;
 		ostream_adapter(ostream_adapter&&) = default;
-		~ostream_adapter() { self->do_write(buf.str(), hdr); }
+		~ostream_adapter() {
+			std::string str = buf.str();
+			self->do_write(str, hdr);
+			logger << self->name() << " <<< " << str;
+		}
 
 		ostream_adapter& handler(std::function<void(boost::system::error_code, std::size_t)> hdr = {}) { this->hdr = hdr; return *this; }
 
@@ -64,6 +118,8 @@ public:
 
 private:
 	void handle_command(std::string line) {
+		logger << name() << " >>> " << line << std::endl;
+
 		if (line.find('<') != std::string::npos) { // WHO < MESSAGE
 			std::string who = line.substr(0, line.find('<'));
 			std::string message = line.substr(line.find('<') + 1);
@@ -156,9 +212,9 @@ private:
 					} else if (self == super_->find_session_by_name(self->name())) {
 						if (ec == boost::system::errc::success || ec == boost::asio::error::eof) {
 							tcp::endpoint endpoint = self->socket_.remote_endpoint();
-							std::cerr << "session closed: " << endpoint.address() << ':' << endpoint.port() << std::endl;
+							logger << " session closed: " << self->name() << ' ' << endpoint.address() << ':' << endpoint.port() << std::endl;
 						} else {
-							std::cerr << "exception: " << ec << std::endl;
+							logger << "exception at do_read: " << ec << std::endl;
 						}
 						super_->remove_session(self);
 
@@ -176,7 +232,7 @@ private:
 				if (hdr) hdr(ec, length);
 				if (!ec && str.length() == length) {
 				} else if (self == super_->find_session_by_name(self->name())) {
-					std::cerr << "exception: " << ec << std::endl;
+					logger << "exception at do_write: " << ec << std::endl;
 					super_->remove_session(self);
 				}
 			});
@@ -240,7 +296,7 @@ private:
 					insert_session(sess);
 					sess->start();
 				} else {
-					// TODO: print error
+					logger << "exception at do_accept: " << ec << std::endl;
 				}
 
 				do_accept();
