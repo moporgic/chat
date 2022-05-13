@@ -18,19 +18,6 @@ using boost::asio::ip::tcp;
 
 class logger {
 public:
-	std::string current_time() const {
-		std::chrono::system_clock::time_point tp = std::chrono::system_clock::now();
-
-		time_t raw_time = std::chrono::system_clock::to_time_t(tp);
-
-		std::tm* timeinfo = std::localtime(&raw_time);
-		std::chrono::milliseconds ms = std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch());
-
-		std::stringstream ss;
-		ss << std::put_time(timeinfo, "%Y-%m-%d %H:%M:%S.") << std::setfill('0') << std::setw(3) << (ms.count() % 1000);
-		return ss.str();
-	}
-
 	void log(const std::string& msg) const {
 		std::string info = current_time();
 		info.reserve(info.size() + msg.size() + 10);
@@ -39,18 +26,14 @@ public:
 		std::cerr << info << std::flush;
 	}
 
-	class ostream_adapter {
+	class ostream_adapter : public std::stringstream {
 	public:
-		ostream_adapter(logger& logref) : logref(logref) {}
+		ostream_adapter(logger& logref) : std::stringstream(), logref(logref) {}
+		ostream_adapter(ostream_adapter&& out) : std::stringstream(std::move(out)), logref(out.logref) {}
 		ostream_adapter(const ostream_adapter&) = delete;
-		ostream_adapter(ostream_adapter&&) = default;
-		~ostream_adapter() { logref.log(buf.str()); }
-
-		template<typename type>
-		std::ostream& operator <<(const type& t) { return buf << t; }
+		~ostream_adapter() { logref.log(str()); }
 	private:
 		logger& logref;
-		std::stringstream buf;
 	};
 
 	template<typename type>
@@ -61,143 +44,61 @@ public:
 	}
 
 private:
+	std::string current_time() const {
+		std::chrono::system_clock::time_point tp = std::chrono::system_clock::now();
+		time_t raw_time = std::chrono::system_clock::to_time_t(tp);
+		std::tm* timeinfo = std::localtime(&raw_time);
+		std::chrono::milliseconds ms = std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch());
+		std::stringstream ss;
+		ss << std::put_time(timeinfo, "%Y-%m-%d %H:%M:%S.") << std::setfill('0') << std::setw(3) << (ms.count() % 1000);
+		return ss.str();
+	}
 } logger;
 
 class session: public std::enable_shared_from_this<session> {
 public:
 	session(tcp::socket socket, std::string name) : socket_(std::move(socket)), name_(name) {}
 
-	void start() {
-		tcp::endpoint endpoint = socket_.remote_endpoint();
-		logger << "session opened: " << name() << ' ' << endpoint.address() << ':' << endpoint.port() << std::endl;
-
-		for (auto sess : super_->list_sessions()) {
-			sess->ostream() << "# client " << this->name() << " logged in" << std::endl;
-		}
-
-		do_read();
-	}
+	tcp::socket& socket() { return socket_; }
+	const tcp::socket& socket() const { return socket_; }
 
 	const std::string& name() const { return name_; }
 	void name(const std::string& name) { name_ = name; }
 
 	class supervisor {
 	public:
-		virtual std::vector<std::shared_ptr<session>> list_sessions() = 0;
-		virtual std::shared_ptr<session> find_session_by_name(const std::string&) = 0;
-		virtual bool rename_session(std::shared_ptr<session>, const std::string&) = 0;
-		virtual bool insert_session(std::shared_ptr<session>) = 0;
-		virtual bool remove_session(std::shared_ptr<session>) = 0;
+		virtual void handle_command(std::shared_ptr<session>, const std::string&) = 0;
+		virtual void handle_read_error(std::shared_ptr<session>, boost::system::error_code) = 0;
+		virtual void handle_write_error(std::shared_ptr<session>, const std::string&, boost::system::error_code) = 0;
 	};
 
 	supervisor* super() { return super_; }
 	void super(supervisor* s) { super_ = s; }
 
-	class ostream_adapter {
+	class ostream_adapter : public std::stringstream {
 	public:
-		ostream_adapter(std::shared_ptr<session> self) : self(self) {}
+		ostream_adapter(std::shared_ptr<session> self, const std::string& tag = {}) : std::stringstream(), self(self) {}
+		ostream_adapter(ostream_adapter&& out) : std::stringstream(std::move(out)), self(out.self) {}
 		ostream_adapter(const ostream_adapter&) = delete;
-		ostream_adapter(ostream_adapter&&) = default;
 		~ostream_adapter() {
-			std::string str = buf.str();
-			self->do_write(str, hdr);
-			logger << self->name() << " <<< " << str;
+			std::string str = this->str();
+			self->async_write(str);
+			logger << self->name() << " << " << str;
 		}
-
-		ostream_adapter& handler(std::function<void(boost::system::error_code, std::size_t)> hdr = {}) { this->hdr = hdr; return *this; }
-
-		template<typename type>
-		std::ostream& operator <<(const type& t) { return buf << t; }
 	private:
 		std::shared_ptr<session> self;
-		std::function<void(boost::system::error_code, std::size_t)> hdr;
-		std::stringstream buf;
 	};
 
 	ostream_adapter ostream() { return ostream_adapter(shared_from_this()); }
+	ostream_adapter ostream_result() { auto out = ostream(); out << "% "; return out; }
+	ostream_adapter ostream_info() { auto out = ostream(); out << "# "; return out; }
 
-private:
-	void handle_command(std::string line) {
-		logger << name() << " >>> " << line << std::endl;
-
-		if (line.find('<') != std::string::npos) { // WHO < MESSAGE
-			std::string who = line.substr(0, line.find('<'));
-			std::string message = line.substr(line.find('<') + 1);
-			boost::trim(who);
-			boost::trim(message);
-
-			auto self = shared_from_this();
-			std::shared_ptr<session> sess = super_->find_session_by_name(who);
-			if (sess) {
-				sess->ostream().handler([this, self, who, message](boost::system::error_code ec, std::size_t length) {
-					if (!ec) {
-					} else {
-						self->ostream() << boost::format("# unable to chat with %s: %s") % who % message << std::endl;
-					}
-
-				}) << this->name() << " > " << message << std::endl;
-			} else {
-				this->ostream() << "# " << who << " is invalid" << std::endl;
-			}
-
-		} else {
-
-			std::stringstream parser(line);
-			std::string cmd;
-			parser >> cmd;
-
-			if (cmd == "name") { // name [NAME]
-				std::string name;
-				parser >> name;
-				try {
-					std::string old = this->name();
-					if (name.size() && name != old) {
-						if (super_->find_session_by_name(name) != nullptr)
-							throw std::runtime_error("duplicate");
-						const char* legal = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/_.-";
-						if (name.find_first_not_of(legal) != std::string::npos)
-							throw std::runtime_error("invalid character " + std::string(1, name[name.find_first_not_of(legal)]));
-
-						auto self(shared_from_this());
-						super_->rename_session(self, name);
-
-						ostream() << "% using name " << this->name() << std::endl;
-						for (auto sess : super_->list_sessions()) {
-							if (sess != self)
-								sess->ostream() << "# client " << old << " renamed as " << name << std::endl;
-						}
-					} else {
-						ostream() << "% using name " << this->name() << std::endl;
-					}
-
-				} catch (std::exception& e) {
-					ostream() << "% unable to name: " << e.what() << std::endl;
-				}
-			} else if (cmd == "who") {
-				auto sessions = super_->list_sessions();
-				std::stringstream sess_list;
-				for (auto sess : sessions) {
-					tcp::endpoint endpoint = sess->socket_.remote_endpoint();
-					sess_list << "% " << sess->name() << ' ' << endpoint.address() << ':' << endpoint.port() << std::endl;
-				}
-				ostream() << "% " << sessions.size() << " online clients" << std::endl << sess_list.str();
-			} else if (cmd == "protocol") {
-				std::string version = "0";
-				parser >> version;
-
-				if (version == "0") {
-					ostream() << "% using protocol " << version << std::endl;
-				} else {
-					ostream() << "% unable to use protocol: unsupported" << std::endl;
-				}
-			} else if (cmd == "help") {
-
-			}
-
-		}
+	void start() {
+		async_read();
 	}
 
-	void do_read() {
+private:
+	void async_read() {
 		auto self(shared_from_this());
 		socket_.async_read_some(boost::asio::buffer(data_, sizeof(data_)),
 				[this, self](boost::system::error_code ec, std::size_t length) {
@@ -205,35 +106,23 @@ private:
 						buffer_.append(data_, length);
 						auto it = buffer_.find('\n');
 						if (it != std::string::npos) {
-							handle_command(buffer_.substr(0, it));
+							super_->handle_command(self, buffer_.substr(0, it));
 							buffer_.erase(0, it + 1);
 						}
-						do_read();
-					} else if (self == super_->find_session_by_name(self->name())) {
-						if (ec == boost::system::errc::success || ec == boost::asio::error::eof) {
-							tcp::endpoint endpoint = self->socket_.remote_endpoint();
-							logger << " session closed: " << self->name() << ' ' << endpoint.address() << ':' << endpoint.port() << std::endl;
-						} else {
-							logger << "exception at do_read: " << ec << std::endl;
-						}
-						super_->remove_session(self);
-
-						for (auto sess : super_->list_sessions()) {
-							sess->ostream() << "# client " << self->name() << " logged out" << std::endl;
-						}
+						async_read();
+					} else {
+						super_->handle_read_error(self, ec);
 					}
 				});
 	}
 
-	void do_write(const std::string& str, std::function<void(boost::system::error_code, std::size_t)> hdr = {}) {
+	void async_write(const std::string& str) {
 		auto self(shared_from_this());
 		boost::asio::async_write(socket_, boost::asio::buffer(str.c_str(), str.length()), boost::asio::transfer_exactly(str.length()),
-			[this, self, str, hdr](boost::system::error_code ec, std::size_t length) {
-				if (hdr) hdr(ec, length);
-				if (!ec && str.length() == length) {
-				} else if (self == super_->find_session_by_name(self->name())) {
-					logger << "exception at do_write: " << ec << std::endl;
-					super_->remove_session(self);
+			[this, self, str](boost::system::error_code ec, std::size_t length) {
+				if (!ec) {
+				} else {
+					super_->handle_write_error(self, str, ec);
 				}
 			});
 	}
@@ -248,76 +137,190 @@ private:
 };
 
 class server : public session::supervisor {
+friend class session;
 public:
-	server(boost::asio::io_context &io_context, short port) :
+	server(boost::asio::io_context& io_context, unsigned short port) :
 			acceptor_(io_context, tcp::endpoint(tcp::v4(), port)) {
-		std::cerr << "chat room: " << port << std::endl;
-		do_accept();
+		logger << "chat room initialized: " << port << std::endl;
 	}
 
-public:
-	virtual std::vector<std::shared_ptr<session>> list_sessions() {
-		std::vector<std::shared_ptr<session>> sess;
-		for (auto& pair : sessions) sess.push_back(pair.second);
-		return sess;
-	}
-	virtual std::shared_ptr<session> find_session_by_name(const std::string& name) {
-		auto it = sessions.find(name);
-		return it != sessions.end() ? it->second : nullptr;
-	}
-	virtual bool rename_session(std::shared_ptr<session> sess, const std::string& after) {
-		if (sess != find_session_by_name(sess->name())) return false;
-		auto hdr = sessions.extract(sess->name()); // TODO: lock client list?
-		hdr.key() = after;
-		sessions.insert(std::move(hdr));
-		sess->name(after);
-		return true;
-	}
-	virtual bool insert_session(std::shared_ptr<session> sess) {
-		if (find_session_by_name(sess->name()) != nullptr) return false;
-		sessions.insert({sess->name(), sess});
-		sess->super(this);
-		return true;
-	}
-	virtual bool remove_session(std::shared_ptr<session> sess) {
-		if (sess != find_session_by_name(sess->name())) return false;
-		sessions.erase(sess->name());
-		return true;
-	}
-
-private:
-	void do_accept() {
+	void async_accept() {
 		acceptor_.async_accept(
 			[this](boost::system::error_code ec, tcp::socket socket) {
 				if (!ec) {
-					static size_t ticket = 0;
-					auto name = "u" + std::to_string(++ticket);
+					auto name = "u" + std::to_string(++ticket_);
 					auto sess = std::make_shared<session>(std::move(socket), name);
 					insert_session(sess);
+					on_login(sess);
 					sess->start();
 				} else {
-					logger << "exception at do_accept: " << ec << std::endl;
+					logger << boost::format("exception at async_accept: %s") % ec << std::endl;
 				}
 
-				do_accept();
+				async_accept();
 			});
 	}
 
+protected:
+	virtual void handle_command(std::shared_ptr<session> self, const std::string& line) {
+		logger << self->name() << " >> " << line << std::endl;
+
+		if (auto it = line.find('<'); it != std::string::npos) { // WHO << MESSAGE
+			std::string who = line.substr(0, it);
+			std::string msg = line.substr(std::min(line.find_first_not_of('<', it), line.length()));
+			boost::trim(who);
+			boost::trim(msg);
+
+			std::shared_ptr<session> sess = find_session_by_name(who);
+			if (sess) {
+				sess->ostream() << boost::format("%s >> %s") % self->name() % msg << std::endl;
+			} else {
+				self->ostream_result() << boost::format("failed chat: invalid client; %s << %s") % who % msg<< std::endl;
+			}
+			return;
+		}
+
+		std::stringstream parser(line);
+		std::string cmd;
+		parser >> cmd;
+
+		if (cmd == "name") { // name [NAME]
+			std::string name;
+			parser >> name;
+			std::string old = self->name();
+
+			if (name.empty() || name == old) {
+				self->ostream_result() << boost::format("name: %s") % self->name() << std::endl;
+				return;
+			}
+
+			if (find_session_by_name(name) != nullptr) {
+				self->ostream_result() << boost::format("failed name: duplicate") << std::endl;
+				return;
+			}
+			auto legal = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/_.-";
+			if (name.find_first_not_of(legal) != std::string::npos) {
+				self->ostream_result() << boost::format("failed name: invalid name") << std::endl;
+				return;
+			}
+			if (rename_session(self, name)) {
+				self->ostream_result() << boost::format("name: %s") % self->name() << std::endl;
+				for (auto sess : list_sessions()) {
+					sess->ostream_info() << boost::format("rename: %s becomes %s") % old % name << std::endl;
+				}
+			} else {
+				self->ostream_result() << boost::format("failed name: unknown") << std::endl;
+			}
+
+		} else if (cmd == "who") {
+			auto out = self->ostream_result();
+			out << "who:";
+			for (auto sess : list_sessions()) out << ' ' << sess->name();
+			out << std::endl;
+
+		} else if (cmd == "protocol") {
+			std::string version = "0";
+			parser >> version;
+
+			if (version == "0") {
+				self->ostream_result() << boost::format("protocol: %s") % version << std::endl;
+			} else {
+				self->ostream_result() << boost::format("failed protocol: unsupported") << std::endl;
+			}
+
+		}
+	}
+	virtual void handle_read_error(std::shared_ptr<session> self, boost::system::error_code ec) {
+		if (self == find_session_by_name(self->name())) {
+			if (ec == boost::system::errc::success || ec == boost::asio::error::eof) {
+			} else {
+				logger << boost::format("exception at async_read: %s") % ec << std::endl;
+			}
+			on_logout(self);
+		}
+	}
+	virtual void handle_write_error(std::shared_ptr<session> self, const std::string& str, boost::system::error_code ec) {
+		if (self == find_session_by_name(self->name())) {
+			if (str.find(" > ") != std::string::npos) {
+				std::string src = str.substr(0, str.find(" > "));
+				std::string msg = str.substr(str.find(" > ") + 3);
+				auto sess = find_session_by_name(src);
+				if (sess) {
+					sess->ostream_result() << boost::format("failed chat: remote error; %s << %s") % self->name() % msg << std::endl;
+				}
+			}
+			logger << boost::format("exception at async_write: %s; %s") % ec % str << std::endl;
+			on_logout(self);
+		}
+	}
+
+private:
+	std::vector<std::shared_ptr<session>> list_sessions() {
+		std::lock_guard<std::mutex> lock(sess_mutex_);
+		std::vector<std::shared_ptr<session>> sess;
+		for (auto& pair : sessions_) sess.push_back(pair.second);
+		return sess;
+	}
+	std::shared_ptr<session> find_session_by_name(const std::string& name) {
+		std::lock_guard<std::mutex> lock(sess_mutex_);
+		auto it = sessions_.find(name);
+		return it != sessions_.end() ? it->second : nullptr;
+	}
+	bool rename_session(std::shared_ptr<session> sess, const std::string& after) {
+		if (sess != find_session_by_name(sess->name())) return false;
+		std::lock_guard<std::mutex> lock(sess_mutex_);
+		auto hdr = sessions_.extract(sess->name());
+		hdr.key() = after;
+		sessions_.insert(std::move(hdr));
+		sess->name(after);
+		return true;
+	}
+	bool insert_session(std::shared_ptr<session> sess) {
+		if (find_session_by_name(sess->name()) != nullptr) return false;
+		std::lock_guard<std::mutex> lock(sess_mutex_);
+		sessions_.insert({sess->name(), sess});
+		sess->super(this);
+		return true;
+	}
+	bool remove_session(std::shared_ptr<session> sess) {
+		if (sess != find_session_by_name(sess->name())) return false;
+		std::lock_guard<std::mutex> lock(sess_mutex_);
+		sessions_.erase(sess->name());
+		return true;
+	}
+	void on_login(std::shared_ptr<session> self) {
+		tcp::endpoint endpoint = self->socket().remote_endpoint();
+		logger << boost::format("login: %s %s:%d") % self->name() % endpoint.address() % endpoint.port() << std::endl;
+		for (auto sess : list_sessions()) {
+			sess->ostream_info() << boost::format("login: %s") % self->name() << std::endl;
+		}
+	}
+	void on_logout(std::shared_ptr<session> self) {
+		tcp::endpoint endpoint = self->socket().remote_endpoint();
+		logger << boost::format("logout: %s %s:%d") % self->name() % endpoint.address() % endpoint.port() << std::endl;
+		remove_session(self);
+		for (auto sess : list_sessions()) {
+			sess->ostream_info() << boost::format("logout: %s") % self->name() << std::endl;
+		}
+	}
+
+private:
+
 	tcp::acceptor acceptor_;
-	std::map<std::string, std::shared_ptr<session>> sessions;
+	std::map<std::string, std::shared_ptr<session>> sessions_;
+	std::mutex sess_mutex_;
+	size_t ticket_ = 0;
 };
 
 int main(int argc, char *argv[]) {
 	try {
-
 		boost::asio::io_context io_context;
-
 		server s(io_context, argc < 2 ? 10000 : std::stoul(argv[1]));
-
+		s.async_accept();
 		io_context.run();
 
 	} catch (std::exception &e) {
-		std::cerr << "Exception: " << e.what() << "\n";
+		logger << "exception: " << e.what() << std::endl;
 	}
 
 	return 0;
