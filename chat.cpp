@@ -88,7 +88,7 @@ public:
 	ostream_adapter ostream_reply() { auto out = ostream(); out << "% "; return out; }
 	ostream_adapter ostream_info() { auto out = ostream(); out << "# "; return out; }
 
-	public:
+public:
 	tcp::socket& socket() { return socket_; }
 	const tcp::socket& socket() const { return socket_; }
 
@@ -98,15 +98,12 @@ public:
 public:
 	void async_read() {
 		auto self(shared_from_this());
-		socket_.async_read_some(boost::asio::buffer(buffer_, sizeof(buffer_)),
-			[this, self](error_code ec, size_t length) {
+		boost::asio::async_read_until(socket_, boost::asio::dynamic_buffer(buffer_), "\n",
+			[this, self](error_code ec, size_t n) {
 				if (!ec) {
-					input_.append(buffer_, length);
-					size_t it;
-					while ((it = input_.find('\n')) != std::string::npos) {
-						handler_->handle_command(self, input_.substr(0, it));
-						input_.erase(0, it + 1);
-					}
+					std::string input(buffer_.substr(0, n - 1));
+					handler_->handle_command(self, input);
+					buffer_.erase(0, n);
 					async_read();
 				} else {
 					handler_->handle_read_error(self, ec);
@@ -114,13 +111,13 @@ public:
 			});
 	}
 
-	void async_write(const std::string& str) {
+	void async_write(const std::string& data) {
 		auto self(shared_from_this());
-		boost::asio::async_write(socket_, boost::asio::buffer(str), boost::asio::transfer_exactly(str.length()),
-			[this, self, str](error_code ec, size_t length) {
+		boost::asio::async_write(socket_, boost::asio::buffer(data),
+			[this, self, data](error_code ec, size_t n) {
 				if (!ec) {
 				} else {
-					handler_->handle_write_error(self, str, ec);
+					handler_->handle_write_error(self, data, ec);
 				}
 			});
 	}
@@ -129,9 +126,7 @@ private:
 	tcp::socket socket_;
 	std::string name_;
 	handler* handler_;
-
-	std::string input_;
-	char buffer_[4096];
+	std::string buffer_;
 };
 
 class server : public client::handler {
