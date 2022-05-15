@@ -6,7 +6,6 @@ broker=${broker:-broker}
 worker=${worker:-worker-1}
 max_jobs=${max_jobs:-1}
 
-
 if [ "$1" != "_H" ]; then
 	log "worker version 2022-05-16 (protocol 0)"
 	if [ "$1" == "-H" ]; then
@@ -14,12 +13,14 @@ if [ "$1" != "_H" ]; then
 		port=${2#*:}
 		shift 2
 		log "connect to chat system at $addr:$port..."
-		trap - EXIT
-		ncat --exec "$0 _H $@" $addr $port && exit 0
+		fifo=$(mktemp -u /tmp/worker.XXXXXXXX)
+		mkfifo $fifo
+		trap "rm -f $fifo;" EXIT
+		${nc:-nc} $addr $port < $fifo | "$0" _H "$@" > $fifo && exit 0
 		log "unable to connect $addr:$port"
 		exit 8
 	fi
-else
+elif [ "$1" == "_H" ]; then
 	log "connected to chat system successfully"
 	shift
 fi
@@ -182,6 +183,14 @@ while IFS= read -r message; do
 			echo "$name << confirm shutdown"
 			log "accept operate shutdown from $name"
 			exit 0
+
+		elif [ "$command $options" == "operate restart" ]; then
+			echo "$name << confirm restart"
+			log "accept operate restart from $name"
+			log "$worker is restarting..."
+			log ""
+			echo "name ${worker}_$$__"
+			broker=$broker worker=$worker max_jobs=$max_jobs exec "$0" "$@"
 
 		else
 			log "ignore $command $options from $name"

@@ -12,12 +12,14 @@ if [ "$1" != "_H" ]; then
 		port=${2#*:}
 		shift 2
 		log "connect to chat system at $addr:$port..."
-		trap - EXIT
-		ncat --exec "$0 _H $@" $addr $port && exit 0
+		fifo=$(mktemp -u /tmp/broker.XXXXXXXX)
+		mkfifo $fifo
+		trap "rm -f $fifo;" EXIT
+		${nc:-nc} $addr $port < $fifo | "$0" _H "$@" > $fifo && exit 0
 		log "unable to connect $addr:$port"
 		exit 8
 	fi
-else
+elif [ "$1" == "_H" ]; then
 	log "connected to chat system successfully"
 	shift
 fi
@@ -278,8 +280,8 @@ while IFS= read -r message; do
 			log "accept operate restart from $name"
 			log "$broker is restarting..."
 			log ""
-			echo "name ${broker}_${RANDOM}____"
-			exec "$0" "$@"
+			echo "name ${broker}_$$__"
+			broker=$broker max_queued_jobs=$max_queued_jobs exec "$0" "$@"
 
 		else
 			log "ignore $command $options from $name"
