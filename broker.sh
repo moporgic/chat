@@ -66,7 +66,7 @@ regex_worker_state="^(\S+) >> state (idle|busy)$"
 regex_notification="^# (.+)$"
 regex_rename="^# name: (\S+) becomes (\S+)$"
 regex_login_or_logout="^# (login|logout): (\S+)$"
-regex_others="^(\S+) >> (operate|use|query) (.+)$"
+regex_others="^(\S+) >> (operate|set|use|query) (.+)$"
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
@@ -168,9 +168,9 @@ while IFS= read -r message; do
 		command=${BASH_REMATCH[2]}
 		options=${BASH_REMATCH[3]}
 
-		regex_use_protocol="use protocol (\S+)"
-		regex_query_jobs="query (request|job)s?(.*)"
-		regex_query_results="query (response|result)s?(.*)"
+		regex_use_protocol="^use protocol (\S+)$"
+		regex_query_jobs="^query (request|job)s?(.*)$"
+		regex_query_results="^query (response|result)s?(.*)$"
 
 		if [ "$command $options" == "query protocol" ]; then
 			echo "$name << protocol 0"
