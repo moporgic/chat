@@ -1,11 +1,12 @@
 #!/bin/bash
-log() { >&2 echo $(date '+%Y-%m-%d %H:%M:%S.%3N') "$@"; }
+log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 log "worker version 2022-05-15"
 
 broker=${broker:-broker}
 name=${name:-worker-1}
 max_jobs=${max_jobs:-1}
-heartbeat=${heartbeat:-60}
+
+trap 'log "'$name' is terminated";' EXIT
 
 log "check chat system protocol..."
 echo "protocol 0"
@@ -18,7 +19,18 @@ while IFS= read -r reply; do
 		exit 1
 	fi
 done
-log "check $broker protocol..."
+log "register myself on the chat system..."
+echo "name ${name:=worker-1}"
+while IFS= read -r reply; do
+	if [ "$reply" == "% name: $name" ]; then
+		break
+	elif [[ "$reply" == "% failed name"* ]]; then
+		name=${name%-*}-$((${name##*-}+1))
+		echo "name $name"
+	fi
+done
+log "registered as $name successfully"
+log "handshake with $broker..."
 echo "$broker << query protocol"
 while IFS= read -r reply; do
 	regex_protocol="^$broker >> protocol (\S+)$"
@@ -38,71 +50,24 @@ while IFS= read -r reply; do
 		echo "$broker << query protocol"
 	fi
 done
-log "register myself on the chat system..."
-echo "name ${name:=worker-1}"
-while IFS= read -r reply; do
-	if [ "$reply" == "% name: $name" ]; then
-		break
-	elif [[ "$reply" == "% failed name"* ]]; then
-		name=${name%-*}-$((${name##*-}+1))
-		echo "name $name"
-	fi
-done
-log "registered as $name successfully"
 
-[ -e $name.run ] && mv -f $name.run $name.run.$(date '+%Y-%m-%d-%H-%M-%S' -r $name.run)
-mkdir $name.run || { log "failed to setup output folder"; exit 3; }
-echo $$ > $name.run/pid
+execute() {
+	id=$1
+	commands=${jobs[$id]}
+	log "execute request $id {$commands}"
+	output=$(eval "$commands" 2>&1)
+	code=$?
+	output="$(<<< $output sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g')"
+	log "response $id $code {$output}; forward to $broker"
+	echo "$broker << response $id $code {$output}"
+}
+
+log "$name setup completed successfully, start monitoring..."
+echo "$broker << state idle"
 
 declare -A jobs # [id]=commands
 declare -A pids # [id]=PID
 state=none
-
-notify_state() {
-	while true; do
-		echo "$broker << state ${1:-idle}"
-		sleep ${heartbeat:-60}
-	done
-}
-become_idle() {
-	log "become idle; start notification"
-	kill ${pids[state]} 2>/dev/null
-	notify_state idle &
-	pids[state]=$!
-}
-become_busy() {
-	log "become busy; start notification"
-	kill ${pids[state]} 2>/dev/null
-	notify_state busy &
-	pids[state]=$!
-}
-norm_output() {
-	sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g'
-}
-execute() {
-	id=$1
-	commands=${jobs[$id]}
-	echo "$1 {$commands}" >> $name.run/request.txt
-	log "execute request $id {$commands}"
-	eval "$commands" > $name.run/$id.output 2>&1
-	code=$?
-	output="$(norm_output < $name.run/$id.output)"
-	log "response $id $code {$output}; forward to $broker"
-	echo "$broker << response $id $code {$output}"
-}
-cleanup() {
-	# log "interrupted"
-	kill ${pids[state]} 2>/dev/null
-	unset pids[state]
-	for id in ${!pids[@]}; do
-		kill ${pids[$id]} 2>/dev/null && log "request $id {${jobs[$id]}} has been terminated"
-	done
-	rm -f $name.run/pid 2>/dev/null
-	exit -1
-}
-trap 'cleanup;' INT
-
-become_idle
 
 regex_request="^$broker >> request (\S+) \{(.+)\}$"
 regex_confirm_response="^$broker >> (accept|reject) response (\S+)$"
@@ -117,24 +82,26 @@ while IFS= read -r message; do
 			jobs[$id]=$commands
 			echo "$broker << accept request $id"
 			log "accept request $id {$commands}"
-			if (( ${#jobs[@]} >= $max_jobs )); then
-				become_busy
-			fi
 			execute $id &
 			pids[$id]=$!
 		else
 			echo "$broker << reject request $id"
-			log "reject request $id; too many requests"
+			log "reject request $id {$commands} since too many running requests"
 		fi
+
+		(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
+		echo "$broker << state $next_state"
+		log "state $next_state"
 
 	elif [[ $message =~ $regex_confirm_response ]]; then
 		confirm=${BASH_REMATCH[1]}
 		id=${BASH_REMATCH[2]}
 		unset jobs[$id] pids[$id]
 		log "$broker ${confirm}ed response $id"
-		if (( ${#jobs[@]} < $max_jobs )); then
-			become_idle
-		fi
+
+		(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
+		echo "$broker << state $next_state"
+		log "state $next_state"
 
 	elif [[ $message =~ $regex_confirm_state ]]; then
 		if [ "$state" != "${BASH_REMATCH[1]}" ]; then
@@ -144,7 +111,7 @@ while IFS= read -r message; do
 
 	elif [[ $message =~ $regex_notification ]]; then
 		info=${BASH_REMATCH[1]}
-		if [ "info" == "logout: $broker" ]; then
+		if [ "$info" == "logout: $broker" ]; then
 			log "$broker disconnected"
 		fi
 
