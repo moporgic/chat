@@ -77,7 +77,7 @@ public:
 	};
 
 	ostream_adapter output() { return ostream_adapter(shared_from_this()); }
-	ostream_adapter reply() { auto out = output(); out << "% "; return out; }
+	ostream_adapter reply()  { auto out = output(); out << "% "; return out; }
 	ostream_adapter notify() { auto out = output(); out << "# "; return out; }
 
 public:
@@ -105,7 +105,7 @@ public:
 
 	void async_write(const std::string& data) {
 		auto self(shared_from_this());
-		std::shared_ptr<std::string> buffer_ = std::make_shared<std::string>(data);
+		auto buffer_(std::make_shared<std::string>(data));
 		boost::asio::async_write(socket_, boost::asio::buffer(*buffer_),
 			[this, self, buffer_](error_code ec, size_t n) {
 				if (!ec) {
@@ -128,7 +128,7 @@ public:
 	server(boost::asio::io_context& io_context, unsigned short port) :
 			acceptor_(io_context, tcp::endpoint(tcp::v4(), port)) {
 		tcp::endpoint endpoint = acceptor_.local_endpoint();
-		logger << "chat room initialized: " << endpoint.address() << ':' << endpoint.port() << std::endl;
+		logger << "chat system initialized: " << endpoint.address() << ':' << endpoint.port() << std::endl;
 	}
 	void async_accept() {
 		acceptor_.async_accept(
@@ -320,6 +320,8 @@ private:
 
 int main(int argc, char *argv[]) {
 	try {
+		logger << "chat system version 2022-05-15 (protocol 0)" << std::endl;
+
 		boost::asio::io_context io_context;
 		chat::server chat(io_context, argc < 2 ? 10000 : std::stoul(argv[1]));
 		chat.async_accept();
