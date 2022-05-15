@@ -5,29 +5,37 @@ log "broker version 2022-05-15 (protocol 0)"
 broker=${broker:-broker}
 max_queued_jobs=${max_queued_jobs:-65536}
 
+verify_chat_system() {
+	log "verify chat system protocol..."
+	echo "protocol 0"
+	while IFS= read -r reply; do
+		if [ "$reply" == "% protocol: 0" ]; then
+			log "chat system verified protocol 0"
+			break
+		elif [[ "$reply" == "% failed protocol"* ]]; then
+			log "unsupported protocol; exit"
+			exit 1
+		fi
+	done
+}
+register_broker() {
+	log "register $broker on the chat system..."
+	echo "name $broker"
+	while IFS= read -r reply; do
+		if [ "$reply" == "% name: $broker" ]; then
+			break
+		elif [[ "$reply" == "% failed name"* ]]; then
+			log "another $broker is already running? exit"
+			exit 2
+		fi
+	done
+	log "registered as $broker successfully"
+}
+
 trap 'log "'$broker' is terminated";' EXIT
 
-log "check chat system protocol..."
-echo "protocol 0"
-while IFS= read -r reply; do
-	if [ "$reply" == "% protocol: 0" ]; then
-		log "chat system using protocol 0"
-		break
-	elif [[ "$reply" == "% failed protocol"* ]]; then
-		log "protocol mismatched!"
-		exit 1
-	fi
-done
-log "register $broker on the chat system..."
-echo "name $broker"
-while IFS= read -r reply; do
-	if [ "$reply" == "% name: $broker" ]; then
-		break
-	elif [[ "$reply" == "% failed name"* ]]; then
-		log "another $broker is already running?"
-		exit 2
-	fi
-done
+verify_chat_system
+register_broker
 
 log "$broker setup completed successfully, start monitoring..."
 
@@ -44,7 +52,7 @@ regex_worker_state="^(\S+) >> state (idle|busy)$"
 regex_notification="^# (.+)$"
 regex_rename="^# name: (\S+) becomes (\S+)$"
 regex_login_or_logout="^# (login|logout): (\S+)$"
-regex_others="^(\S+) >> (operate|query) (.+)$"
+regex_others="^(\S+) >> (operate|use|query) (.+)$"
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
@@ -143,31 +151,42 @@ while IFS= read -r message; do
 
 	elif [[ $message =~ $regex_others ]]; then
 		name=${BASH_REMATCH[1]}
-		type=${BASH_REMATCH[2]}
-		command=${BASH_REMATCH[3]}
+		command=${BASH_REMATCH[2]}
+		options=${BASH_REMATCH[3]}
 
+		regex_use_protocol="use protocol (\S+)"
 		regex_query_jobs="query (request|job)s?(.*)"
 		regex_query_results="query (response|result)s?(.*)"
 
-		if [ "$type $command" == "query protocol" ]; then
+		if [ "$command $options" == "query protocol" ]; then
 			echo "$name << protocol 0"
 			log "accept query protocol from $name"
 
-		elif [ "$type $command" == "query queue" ]; then
+		elif [[ "$command $options" =~ $regex_use_protocol ]]; then
+			protocol=${BASH_REMATCH[1]}
+			if [ "$protocol" == "0" ]; then
+				echo "$name << accept protocol $protocol"
+				log "accept use protocol $protocol from $name"
+			else
+				echo "$name << reject protocol $protocol"
+				log "reject use protocol $protocol from $name, unsupported protocol"
+			fi
+
+		elif [ "$command $options" == "query queue" ]; then
 			echo "$name << queue = (${queue[@]})"
 			log "accept query queue from $name"
 
-		elif [[ "$type $command" =~ $regex_query_jobs ]] ; then
+		elif [[ "$command $options" =~ $regex_query_jobs ]] ; then
 			ids=(${BASH_REMATCH[2]:-$(printf "%d\n" ${!jobs[@]} | sort -n)})
 			echo "$name << jobs = (${ids[@]})"
 			for id in ${ids[@]}; do
 				requester="${jobs[$id]%% *}"
-				command="${jobs[$id]#* }"
-				echo "$name << # request $(printf %${#ids[-1]}d $id) $requester {$command}"
+				options="${jobs[$id]#* }"
+				echo "$name << # request $(printf %${#ids[-1]}d $id) $requester {$options}"
 			done
 			log "accept query jobs from $name"
 
-		elif [[ "$type $command" =~ $regex_query_results ]] ; then
+		elif [[ "$command $options" =~ $regex_query_results ]] ; then
 			ids=(${BASH_REMATCH[2]:-$(printf "%d\n" ${!results[@]} | sort -n)})
 			echo "$name << results = (${ids[@]})"
 			for id in ${ids[@]}; do
@@ -177,7 +196,7 @@ while IFS= read -r message; do
 			done
 			log "accept query results from $name"
 
-		elif [ "$type $command" == "query assign" ]; then
+		elif [ "$command $options" == "query assign" ]; then
 			assignment=()
 			for id in ${!assign[@]}; do
 				assignment+=("[$id]=${assign[$id]}")
@@ -185,7 +204,7 @@ while IFS= read -r message; do
 			echo "$name << assign = (${assignment[@]})"
 			log "accept query assign from $name"
 
-		elif [ "$type $command" == "query state" ]; then
+		elif [ "$command $options" == "query state" ]; then
 			status=()
 			for worker in ${!state[@]}; do
 				status+=("[$worker]=${state[$worker]}")
@@ -193,13 +212,13 @@ while IFS= read -r message; do
 			echo "$name << state = (${status[@]})"
 			log "accept query state from $name"
 
-		elif [ "$type $command" == "operate shutdown" ]; then
+		elif [ "$command $options" == "operate shutdown" ]; then
 			echo "$name << confirm shutdown"
 			log "accept operate shutdown from $name"
 			exit 0
 
 		else
-			log "unknown $type $command from $name"
+			log "unknown $command $options from $name"
 		fi
 
 	else

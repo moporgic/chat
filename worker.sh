@@ -3,17 +3,15 @@ log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 log "worker version 2022-05-15 (protocol 0)"
 
 broker=${broker:-broker}
-name=${name:-worker-1}
+worker=${worker:-worker-1}
 max_jobs=${max_jobs:-1}
-
-trap 'log "'$name' is terminated";' EXIT
 
 verify_chat_system() {
 	log "verify chat system protocol..."
 	echo "protocol 0"
 	while IFS= read -r reply; do
 		if [ "$reply" == "% protocol: 0" ]; then
-			log "chat system using protocol 0"
+			log "chat system verified protocol 0"
 			break
 		elif [[ "$reply" == "% failed protocol"* ]]; then
 			log "unsupported protocol; exit"
@@ -21,38 +19,34 @@ verify_chat_system() {
 		fi
 	done
 }
-register() {
+register_worker() {
 	log "register myself on the chat system..."
-	echo "name ${name:=worker-1}"
+	echo "name ${worker:=worker-1}"
 	while IFS= read -r reply; do
-		if [ "$reply" == "% name: $name" ]; then
+		if [ "$reply" == "% name: $worker" ]; then
 			break
 		elif [[ "$reply" == "% failed name"* ]]; then
-			name=${name%-*}-$((${name##*-}+1))
-			echo "name $name"
+			name=${worker%-*}-$((${worker##*-}+1))
+			echo "name $worker"
 		fi
 	done
-	log "registered as $name successfully"
+	log "registered as $worker successfully"
 }
 handshake() {
 	log "handshake with $broker..."
-	echo "$broker << query protocol"
+	echo "$broker << use protocol 0"
 	while IFS= read -r reply; do
-		regex_protocol="^$broker >> protocol (\S+)$"
 		regex_failed_chat="^% failed chat.*$"
-		if [[ $reply =~ $regex_protocol ]]; then
-			protocol=${BASH_REMATCH[1]}
-			if [ "$protocol" == "0" ]; then
-				log "handshake with $broker successfully"
-				break
-			else
-				log "handshake failed, unsupported protocol; exit"
-				exit 2
-			fi
+		if [ "$reply" == "$broker >> accept protocol 0" ]; then
+			log "handshake with $broker successfully"
+			break
+		elif [ "$reply" == "$broker >> reject protocol 0" ]; then
+			log "handshake failed, unsupported protocol; exit"
+			exit 2
 		elif [[ $reply =~ $regex_failed_chat ]]; then
 			(( $((wait_count++ % 10)) )) || log "$broker is not connected, wait..."
 			sleep 10
-			echo "$broker << query protocol"
+			echo "$broker << use protocol 0"
 		fi
 	done
 }
@@ -62,18 +56,22 @@ execute() {
 	log "execute request $id {$command}"
 	output=$(eval "$command" 2>&1)
 	code=$?
+	# drop ASCII terminal color codes then escape '\' '\n' '\t' with '\'
 	output="$(<<< $output sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
 	          sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]')"
-	log "response $id $code {$output}; forward to $broker"
+	log "complete response $id $code {$output}; forward to $broker"
 	echo "$broker << response $id $code {$output}"
 }
 
+trap 'log "'$worker' is terminated";' EXIT
+
 verify_chat_system
-register
+register_worker
 handshake
 
-log "$name setup completed successfully, start monitoring..."
+log "$worker setup completed successfully, start monitoring..."
 echo "$broker << state idle"
+log "state $next_state; notify $broker"
 
 declare -A jobs # [id]=command
 declare -A pids # [id]=PID
@@ -127,7 +125,6 @@ while IFS= read -r message; do
 			(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
 			echo "$broker << state $next_state"
 			log "state $next_state; notify $broker"
-
 		fi
 
 	else
