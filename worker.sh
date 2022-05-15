@@ -6,14 +6,16 @@ broker=${broker:-broker}
 worker=${worker:-worker-1}
 max_jobs=${max_jobs:-1}
 
+
 if [ "$1" != "_H" ]; then
-	log "worker version 2022-05-15 (protocol 0)"
+	log "worker version 2022-05-16 (protocol 0)"
 	if [ "$1" == "-H" ]; then
 		addr=${2%:*}
 		port=${2#*:}
 		shift 2
 		log "connect to chat system at $addr:$port..."
-		ncat --exec "$0 _H $@" $addr $port && { trap - EXIT; exit 0; }
+		trap - EXIT
+		ncat --exec "$0 _H $@" $addr $port && exit 0
 		log "unable to connect $addr:$port"
 		exit 8
 	fi
@@ -28,25 +30,29 @@ verify_chat_system() {
 	while IFS= read -r reply; do
 		if [ "$reply" == "% protocol: 0" ]; then
 			log "chat system verified protocol 0"
-			break
+			return
 		elif [[ "$reply" == "% failed protocol"* ]]; then
 			log "unsupported protocol; exit"
 			exit 1
 		fi
 	done
+	log "failed to verify protocol; exit"
+	exit 1
 }
 register_worker() {
 	log "register worker on the chat system..."
 	echo "name ${worker:=worker-1}"
 	while IFS= read -r reply; do
 		if [ "$reply" == "% name: $worker" ]; then
-			break
+			log "registered as $worker successfully"
+			return
 		elif [[ "$reply" == "% failed name"* ]]; then
 			worker=${worker%-*}-$((${worker##*-}+1))
 			echo "name $worker"
 		fi
 	done
-	log "registered as $worker successfully"
+	log "failed to register worker; exit"
+	exit 2
 }
 execute() {
 	id=$1

@@ -6,13 +6,14 @@ broker=${broker:-broker}
 max_queued_jobs=${max_queued_jobs:-65536}
 
 if [ "$1" != "_H" ]; then
-	log "broker version 2022-05-15 (protocol 0)"
+	log "broker version 2022-05-16 (protocol 0)"
 	if [ "$1" == "-H" ]; then
 		addr=${2%:*}
 		port=${2#*:}
 		shift 2
 		log "connect to chat system at $addr:$port..."
-		ncat --exec "$0 _H $@" $addr $port && { trap - EXIT; exit 0; }
+		trap - EXIT
+		ncat --exec "$0 _H $@" $addr $port && exit 0
 		log "unable to connect $addr:$port"
 		exit 8
 	fi
@@ -27,25 +28,29 @@ verify_chat_system() {
 	while IFS= read -r reply; do
 		if [ "$reply" == "% protocol: 0" ]; then
 			log "chat system verified protocol 0"
-			break
+			return
 		elif [[ "$reply" == "% failed protocol"* ]]; then
 			log "unsupported protocol; exit"
 			exit 1
 		fi
 	done
+	log "failed to verify protocol; exit"
+	exit 1
 }
 register_broker() {
 	log "register $broker on the chat system..."
 	echo "name $broker"
 	while IFS= read -r reply; do
 		if [ "$reply" == "% name: $broker" ]; then
-			break
+			log "registered as $broker successfully"
+			return
 		elif [[ "$reply" == "% failed name"* ]]; then
 			log "another $broker is already running? exit"
 			exit 2
 		fi
 	done
-	log "registered as $broker successfully"
+	log "failed to register $broker; exit"
+	exit 2
 }
 
 verify_chat_system
