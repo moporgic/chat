@@ -48,24 +48,6 @@ register_worker() {
 	done
 	log "registered as $worker successfully"
 }
-handshake() {
-	log "handshake with $broker..."
-	echo "$broker << use protocol 0"
-	while IFS= read -r reply; do
-		regex_failed_chat="^% failed chat.*$"
-		if [ "$reply" == "$broker >> accept protocol 0" ]; then
-			log "handshake with $broker successfully"
-			break
-		elif [ "$reply" == "$broker >> reject protocol 0" ]; then
-			log "handshake failed, unsupported protocol; exit"
-			exit 2
-		elif [[ $reply =~ $regex_failed_chat ]]; then
-			(( $((wait_count++ % 10)) )) || log "$broker is not connected, wait..."
-			sleep 10
-			echo "$broker << use protocol 0"
-		fi
-	done
-}
 execute() {
 	id=$1
 	command=${jobs[$id]}
@@ -81,66 +63,101 @@ execute() {
 
 verify_chat_system
 register_worker
-handshake
 
-log "$worker setup completed successfully, start monitoring..."
-echo "$broker << state idle"
-log "state idle; notify $broker"
+log "$worker setup completed successfully, make handshake with $broker..."
+echo "$broker << use protocol 0"
 
 declare -A jobs # [id]=command
 declare -A pids # [id]=PID
-state=none
+state=idle
 
-regex_request="^$broker >> request (\S+) \{(.+)\}$"
-regex_confirm_response="^$broker >> (accept|reject) response (\S+)$"
-regex_confirm_state="^$broker >> confirm state (idle|busy)$"
+regex_request="^(\S+) >> request (\S+) \{(.+)\}$"
+regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
+regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (\S+)$"
+regex_failed_chat="^% failed chat.*$"
 regex_notification="^# (.+)$"
 regex_others="^(\S+) >> (operate|set|use|query) (.+)$"
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
-		id=${BASH_REMATCH[1]}
-		command=${BASH_REMATCH[2]}
-		if (( ${#jobs[@]} < $max_jobs )); then
-			jobs[$id]=$command
-			echo "$broker << accept request $id"
-			log "accept request $id {$command} from $broker"
-			execute $id &
-			pids[$id]=$!
+		requester=${BASH_REMATCH[1]}
+		id=${BASH_REMATCH[2]}
+		command=${BASH_REMATCH[3]}
+		if [ "$requester" == "$broker" ]; then
+			if (( ${#jobs[@]} < $max_jobs )); then
+				jobs[$id]=$command
+				echo "$broker << accept request $id"
+				log "accept request $id {$command} from $broker"
+				execute $id &
+				pids[$id]=$!
+			else
+				echo "$broker << reject request $id"
+				log "reject request $id {$command} from $broker since too many running requests"
+			fi
+
+			(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
+			echo "$broker << state $next_state"
+			log "state $next_state; notify $broker"
 		else
-			echo "$broker << reject request $id"
-			log "reject request $id {$command} from $broker since too many running requests"
+			echo "$requester << reject request $id"
+			log "reject request $id {$command} from $requester since it is unauthorized"
 		fi
 
-		(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
-		echo "$broker << state $next_state"
-		log "state $next_state; notify $broker"
-
 	elif [[ $message =~ $regex_confirm_response ]]; then
-		confirm=${BASH_REMATCH[1]}
-		id=${BASH_REMATCH[2]}
-		unset jobs[$id] pids[$id]
-		log "$broker ${confirm}ed response $id"
+		who=${BASH_REMATCH[1]}
+		confirm=${BASH_REMATCH[2]}
+		id=${BASH_REMATCH[3]}
+		if [ "$who" == "$broker" ]; then
+			unset jobs[$id] pids[$id]
+			log "$broker ${confirm}ed response $id"
 
-		(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
-		echo "$broker << state $next_state"
-		log "state $next_state; notify $broker"
+			(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
+			echo "$broker << state $next_state"
+			log "state $next_state; notify $broker"
+		else
+			log "$who ${confirm}ed response $id; ignore since it is unauthorized"
+		fi
 
-	elif [[ $message =~ $regex_confirm_state ]]; then
-		if [ "$state" != "${BASH_REMATCH[1]}" ]; then
-			state=${BASH_REMATCH[1]}
-			log "$broker confirmed state $state"
+	elif [[ $message =~ $regex_confirm_others ]]; then
+		who=${BASH_REMATCH[1]}
+		confirm=${BASH_REMATCH[2]}
+		what=${BASH_REMATCH[3]}
+		option=${BASH_REMATCH[4]}
+
+		if [ "$who $confirm $what" == "$broker confirm state" ]; then
+			if [ "$state" != "$option" ]; then
+				state=$option
+				log "$broker confirmed state $state"
+			fi
+
+		elif [ "$who $what" == "$broker protocol" ]; then
+			if [ "$confirm" == "accept" ]; then
+				log "handshake with $broker successfully"
+				echo "$broker << state ${state:-idle}"
+				log "state ${state:-idle}; notify $broker"
+
+			elif [ "$confirm" == "reject" ]; then
+				log "handshake failed, unsupported protocol; exit"
+				exit 2
+			fi
+
+		else
+			log "ignore confirmation $confirm $what $option from $who"
 		fi
 
 	elif [[ $message =~ $regex_notification ]]; then
 		info=${BASH_REMATCH[1]}
+
 		if [ "$info" == "logout: $broker" ]; then
-			log "$broker disconnected, wait until $broker come back"
-			handshake
-			(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
-			echo "$broker << state $next_state"
-			log "state $next_state; notify $broker"
+			log "$broker disconnected, wait until $broker come back..."
+
+		elif [ "$info" == "login: $broker" ] || [[ "$info" == "name: "*" becomes $broker" ]]; then
+			log "$broker connected, make handshake with $broker..."
+			echo "$broker << use protocol 0"
 		fi
+
+	elif [[ $message =~ $regex_failed_chat ]]; then
+		log "$broker disconnected, wait until $broker come back..."
 
 	elif [[ $message =~ $regex_others ]]; then
 		name=${BASH_REMATCH[1]}
@@ -152,7 +169,8 @@ while IFS= read -r message; do
 		if [[ "$command $options" =~ $regex_set_broker ]]; then
 			broker=${BASH_REMATCH[1]}
 			echo "$name << confirm set broker $broker"
-			log "accept set broker $broker from $name"
+			log "accept set broker $broker from $name, make handshake with $broker..."
+			echo "$broker << use protocol 0"
 
 		elif [ "$command $options" == "operate shutdown" ]; then
 			echo "$name << confirm shutdown"
@@ -160,11 +178,11 @@ while IFS= read -r message; do
 			exit 0
 
 		else
-			log "unknown $command $options from $name"
+			log "ignore $command $options from $name"
 		fi
 
 	else
-		log "ignored message: $message"
+		log "ignore message: $message"
 	fi
 done
 
