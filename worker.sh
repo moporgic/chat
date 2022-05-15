@@ -2,28 +2,29 @@
 log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 trap 'log "$worker is terminated";' EXIT
 
-broker=${broker:-broker}
-worker=${worker:-worker-1}
-max_jobs=${max_jobs:-1}
-
-if [ "$1" != "_H" ]; then
+if [ "$1" != _NC ]; then
 	log "worker version 2022-05-16 (protocol 0)"
-	if [ "$1" == "-H" ]; then
-		addr=${2%:*}
-		port=${2#*:}
-		shift 2
+	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
+		addr=${BASH_REMATCH[1]}
+		port=${BASH_REMATCH[2]}
+		shift
 		log "connect to chat system at $addr:$port..."
 		fifo=$(mktemp -u /tmp/worker.XXXXXXXX)
 		mkfifo $fifo
 		trap "rm -f $fifo;" EXIT
-		${nc:-nc} $addr $port < $fifo | "$0" _H "$@" > $fifo && exit 0
+		nc $addr $port < $fifo | "$0" _NC "$@" > $fifo && exit 0
 		log "unable to connect $addr:$port"
 		exit 8
 	fi
-elif [ "$1" == "_H" ]; then
+elif [ "$1" == _NC ]; then
 	log "connected to chat system successfully"
 	shift
 fi
+
+broker=${broker:-broker}
+worker=${worker:-worker-1}
+max_jobs=${max_jobs:-1}
+for var in "$@"; do declare "$var"; done
 
 verify_chat_system() {
 	log "verify chat system protocol..."
