@@ -1,10 +1,26 @@
 #!/bin/bash
 log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
-log "worker version 2022-05-15 (protocol 0)"
+trap 'log "$worker is terminated";' EXIT
 
 broker=${broker:-broker}
 worker=${worker:-worker-1}
 max_jobs=${max_jobs:-1}
+
+if [ "$1" != "_H" ]; then
+	log "worker version 2022-05-15 (protocol 0)"
+	if [ "$1" == "-H" ]; then
+		addr=${2%:*}
+		port=${2#*:}
+		shift 2
+		log "connect to chat system at $addr:$port..."
+		ncat --exec "$0 _H $@" $addr $port && { trap - EXIT; exit 0; }
+		log "unable to connect $addr:$port"
+		exit 8
+	fi
+else
+	log "connected to chat system successfully"
+	shift
+fi
 
 verify_chat_system() {
 	log "verify chat system protocol..."
@@ -20,7 +36,7 @@ verify_chat_system() {
 	done
 }
 register_worker() {
-	log "register myself on the chat system..."
+	log "register worker on the chat system..."
 	echo "name ${worker:=worker-1}"
 	while IFS= read -r reply; do
 		if [ "$reply" == "% name: $worker" ]; then
@@ -62,8 +78,6 @@ execute() {
 	log "complete response $id $code {$output}; forward to $broker"
 	echo "$broker << response $id $code {$output}"
 }
-
-trap 'log "'$worker' is terminated";' EXIT
 
 verify_chat_system
 register_worker
