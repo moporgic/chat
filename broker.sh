@@ -1,6 +1,6 @@
 #!/bin/bash
 log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
-log "broker version 2022-05-15"
+log "broker version 2022-05-15 (protocol 0)"
 
 broker=${broker:-broker}
 max_queued_jobs=${max_queued_jobs:-65536}
@@ -31,7 +31,7 @@ done
 
 log "$broker setup completed successfully, start monitoring..."
 
-declare -A jobs # [id]=requester commands
+declare -A jobs # [id]=requester command
 declare -A assign # [id]=worker
 declare -A state # [worker]=idle|hold|busy
 queue=()
@@ -42,22 +42,22 @@ regex_confirm="^(\S+) >> (accept|reject) (request|response) (\S+)$"
 regex_worker_state="^(\S+) >> state (idle|busy)$"
 regex_notification="^# (.+)$"
 regex_rename="^# name: (\S+) becomes (\S+)$"
-regex_login_logout="^# (login|logout): (\S+)$"
-regex_query="^(\S+) >> query (.+)$"
+regex_login_or_logout="^# (login|logout): (\S+)$"
+regex_others="^(\S+) >> (operate|query) (.+)$"
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
 		requester=${BASH_REMATCH[1]}
-		commands=${BASH_REMATCH[3]:-${BASH_REMATCH[4]}}
+		command=${BASH_REMATCH[3]:-${BASH_REMATCH[4]}}
 		if (( ${#queue[@]} < ${max_queued_jobs:-65536} )); then
 			id=$((++id_counter))
-			jobs[$id]="$requester $commands"
+			jobs[$id]="$requester $command"
 			queue+=($id)
-			echo "$requester << accept request $id {$commands}"
-			log "accept request $id {$commands} from $requester and enqueue $id; queue = (${queue[@]})"
+			echo "$requester << accept request $id {$command}"
+			log "accept request $id {$command} from $requester and enqueue $id; queue = (${queue[@]})"
 		else
-			echo "$requester << reject request {$commands}"
-			log "reject request $id {$commands} from $requester since too many queued requests; queue = (${queue[@]})"
+			echo "$requester << reject request {$command}"
+			log "reject request $id {$command} from $requester since too many queued requests; queue = (${queue[@]})"
 		fi
 
 	elif [[ $message =~ $regex_response ]]; then
@@ -69,7 +69,7 @@ while IFS= read -r message; do
 		if [ "${assign[$id]}" == "$worker" ]; then
 			unset assign[$id]
 			echo "$worker << accept response $id"
-			requester=${jobs[$id]%% *}
+			requester="${jobs[$id]%% *}"
 			echo "$requester << response $id $code {$output}"
 			log "accept response $id $code {$output} from $worker and forward it to $requester"
 		else
@@ -122,7 +122,7 @@ while IFS= read -r message; do
 		fi
 
 	elif [[ $message =~ $regex_notification ]]; then
-		if [[ $message =~ $regex_login_logout ]]; then
+		if [[ $message =~ $regex_login_or_logout ]]; then
 			type=${BASH_REMATCH[1]}
 			name=${BASH_REMATCH[2]}
 			if [ "$type" == "logout" ] && [[ -v state[$name] ]]; then
@@ -138,14 +138,53 @@ while IFS= read -r message; do
 			fi
 		fi
 
-	elif [[ $message =~ $regex_query ]]; then
+	elif [[ $message =~ $regex_others ]]; then
 		name=${BASH_REMATCH[1]}
-		query=${BASH_REMATCH[2]}
-		if [ "$query" == "protocol" ]; then
+		type=${BASH_REMATCH[2]}
+		command=${BASH_REMATCH[3]}
+		if [ "$type $command" == "query protocol" ]; then
 			echo "$name << protocol 0"
 			log "accept query protocol from $name"
+
+		elif [ "$type $command" == "query queue" ]; then
+			echo "$name << queue = (${queue[@]})"
+			log "accept query queue from $name"
+
+		elif [ "$type $command" == "query jobs" ] ; then
+			ids=()
+			for id in ${!jobs[@]}; do
+				ids+=($id)
+			done
+			ids=($(printf "%d\n" ${ids[@]} | sort -n))
+			echo "$name << jobs = (${ids[@]})"
+			for id in ${ids[@]}; do
+				echo "$name << # $(printf %${#ids[-1]}d $id) {${jobs[$id]}}"
+			done
+			log "accept query jobs from $name"
+
+		elif [ "$type $command" == "query assign" ]; then
+			assignment=()
+			for id in ${!assign[@]}; do
+				assignment+=("[$id]=${assign[$id]}")
+			done
+			echo "$name << assign = (${assignment[@]})"
+			log "accept query assign from $name"
+
+		elif [ "$type $command" == "query state" ]; then
+			status=()
+			for worker in ${!state[@]}; do
+				status+=("[$worker]=${state[$worker]}")
+			done
+			echo "$name << state = (${status[@]})"
+			log "accept query state from $name"
+
+		elif [ "$type $command" == "operate shutdown" ]; then
+			echo "$name << confirm shutdown"
+			log "accept operate shutdown from $name"
+			exit 0
+
 		else
-			log "unknown query $query from $name"
+			log "unknown $type $command from $name"
 		fi
 
 	else
@@ -163,3 +202,5 @@ while IFS= read -r message; do
 		fi
 	done
 done
+
+log "message input is terminated, chat system is down?"
