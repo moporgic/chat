@@ -1,6 +1,6 @@
 #!/bin/bash
 log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
-log "worker version 2022-05-15"
+log "worker version 2022-05-15 (protocol 0)"
 
 broker=${broker:-broker}
 name=${name:-worker-1}
@@ -53,11 +53,12 @@ done
 
 execute() {
 	id=$1
-	commands=${jobs[$id]}
-	log "execute request $id {$commands}"
-	output=$(eval "$commands" 2>&1)
+	command=${jobs[$id]}
+	log "execute request $id {$command}"
+	output=$(eval "$command" 2>&1)
 	code=$?
-	output="$(<<< $output sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g')"
+	output="$(<<< $output sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
+	          sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]')"
 	log "response $id $code {$output}; forward to $broker"
 	echo "$broker << response $id $code {$output}"
 }
@@ -65,7 +66,7 @@ execute() {
 log "$name setup completed successfully, start monitoring..."
 echo "$broker << state idle"
 
-declare -A jobs # [id]=commands
+declare -A jobs # [id]=command
 declare -A pids # [id]=PID
 state=none
 
@@ -77,21 +78,21 @@ regex_notification="^# (.+)$"
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
 		id=${BASH_REMATCH[1]}
-		commands=${BASH_REMATCH[2]}
+		command=${BASH_REMATCH[2]}
 		if (( ${#jobs[@]} < $max_jobs )); then
-			jobs[$id]=$commands
+			jobs[$id]=$command
 			echo "$broker << accept request $id"
-			log "accept request $id {$commands}"
+			log "accept request $id {$command} from $broker"
 			execute $id &
 			pids[$id]=$!
 		else
 			echo "$broker << reject request $id"
-			log "reject request $id {$commands} since too many running requests"
+			log "reject request $id {$command} from $broker since too many running requests"
 		fi
 
 		(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
 		echo "$broker << state $next_state"
-		log "state $next_state"
+		log "state $next_state; notify $broker"
 
 	elif [[ $message =~ $regex_confirm_response ]]; then
 		confirm=${BASH_REMATCH[1]}
@@ -101,7 +102,7 @@ while IFS= read -r message; do
 
 		(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
 		echo "$broker << state $next_state"
-		log "state $next_state"
+		log "state $next_state; notify $broker"
 
 	elif [[ $message =~ $regex_confirm_state ]]; then
 		if [ "$state" != "${BASH_REMATCH[1]}" ]; then
@@ -119,3 +120,5 @@ while IFS= read -r message; do
 		log "ignored message: $message"
 	fi
 done
+
+log "message input is terminated, chat system is down?"
