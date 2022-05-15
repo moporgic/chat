@@ -77,10 +77,10 @@ while IFS= read -r message; do
 			jobs[$id]="$requester $command"
 			queue+=($id)
 			echo "$requester << accept request $id {$command}"
-			log "accept request $id {$command} from $requester and enqueue $id; queue = (${queue[@]})"
+			log "accept request $id {$command} from $requester and enqueue $id, queue = (${queue[@]})"
 		else
 			echo "$requester << reject request {$command}"
-			log "reject request $id {$command} from $requester since too many queued requests; queue = (${queue[@]})"
+			log "reject request $id {$command} from $requester since too many queued requests, queue = (${queue[@]})"
 		fi
 
 	elif [[ $message =~ $regex_response ]]; then
@@ -138,7 +138,7 @@ while IFS= read -r message; do
 					unset assign[$id]
 				fi
 				queue=($id ${queue[@]})
-				log "$name ${confirm}ed $type $id; confirm and re-enqueue $id; queue = (${queue[@]})"
+				log "$name ${confirm}ed $type $id; confirm and re-enqueue $id, queue = (${queue[@]})"
 			fi
 		elif [ "$who" ]; then
 			log "$name ${confirm}ed $type $id; ignore since it is owned by $who"
@@ -156,7 +156,7 @@ while IFS= read -r message; do
 					if [ "${assign[$id]}" == "$name" ]; then
 						unset assign[$id]
 						queue=($id ${queue[@]})
-						log "revoke assigned request $id; re-enqueue $id; queue = (${queue[@]})"
+						log "revoke assigned request $id; re-enqueue $id, queue = (${queue[@]})"
 					fi
 				done
 				unset state[$name]
@@ -171,6 +171,8 @@ while IFS= read -r message; do
 		regex_use_protocol="^use protocol (\S+)$"
 		regex_query_jobs="^query (request|job)s?(.*)$"
 		regex_query_results="^query (response|result)s?(.*)$"
+		regex_query_assign="^query (assign(ment)?|task)s?$"
+		regex_query_state="^query (state|worker)s?$"
 
 		if [ "$command $options" == "query protocol" ]; then
 			echo "$name << protocol 0"
@@ -210,7 +212,7 @@ while IFS= read -r message; do
 			done
 			log "accept query results from $name"
 
-		elif [ "$command $options" == "query assign" ]; then
+		elif [[ "$command $options" =~ $regex_query_assign ]]; then
 			assignment=()
 			for id in ${!assign[@]}; do
 				assignment+=("[$id]=${assign[$id]}")
@@ -218,7 +220,7 @@ while IFS= read -r message; do
 			echo "$name << assign = (${assignment[@]})"
 			log "accept query assign from $name"
 
-		elif [ "$command $options" == "query state" ]; then
+		elif [[ "$command $options" =~ $regex_query_state ]]; then
 			status=()
 			for worker in ${!state[@]}; do
 				status+=("[$worker]=${state[$worker]}")
@@ -232,11 +234,11 @@ while IFS= read -r message; do
 			exit 0
 
 		else
-			log "unknown $command $options from $name"
+			log "ignore $command $options from $name"
 		fi
 
 	else
-		log "ignored message: $message"
+		log "ignore message: $message"
 	fi
 
 	for worker in ${!state[@]}; do
