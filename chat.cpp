@@ -105,11 +105,12 @@ public:
 
 	void async_write(const std::string& data) {
 		auto self(shared_from_this());
-		boost::asio::async_write(socket_, boost::asio::buffer(data),
-			[this, self, data](error_code ec, size_t n) {
+		std::shared_ptr<std::string> buffer_ = std::make_shared<std::string>(data);
+		boost::asio::async_write(socket_, boost::asio::buffer(*buffer_),
+			[this, self, buffer_](error_code ec, size_t n) {
 				if (!ec) {
 				} else {
-					handler_->handle_write_error(self, data, ec);
+					handler_->handle_write_error(self, *buffer_, ec);
 				}
 			});
 	}
