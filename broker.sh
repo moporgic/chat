@@ -32,6 +32,7 @@ done
 log "$broker setup completed successfully, start monitoring..."
 
 declare -A jobs # [id]=requester command
+declare -A results # [id]=code output
 declare -A assign # [id]=worker
 declare -A state # [worker]=idle|hold|busy
 queue=()
@@ -70,6 +71,7 @@ while IFS= read -r message; do
 			unset assign[$id]
 			echo "$worker << accept response $id"
 			requester="${jobs[$id]%% *}"
+			results[$id]="$code $output"
 			echo "$requester << response $id $code {$output}"
 			log "accept response $id $code {$output} from $worker and forward it to $requester"
 		else
@@ -106,6 +108,7 @@ while IFS= read -r message; do
 			if [ "$confirm" == "accept" ]; then
 				if [ "$type" == "response" ]; then
 					unset jobs[$id]
+					unset results[$id]
 				fi
 				log "$name ${confirm}ed $type $id; confirm"
 			elif [ "$confirm" == "reject" ]; then
@@ -142,6 +145,10 @@ while IFS= read -r message; do
 		name=${BASH_REMATCH[1]}
 		type=${BASH_REMATCH[2]}
 		command=${BASH_REMATCH[3]}
+
+		regex_query_jobs="query (request|job)s?(.*)"
+		regex_query_results="query (response|result)s?(.*)"
+
 		if [ "$type $command" == "query protocol" ]; then
 			echo "$name << protocol 0"
 			log "accept query protocol from $name"
@@ -150,17 +157,25 @@ while IFS= read -r message; do
 			echo "$name << queue = (${queue[@]})"
 			log "accept query queue from $name"
 
-		elif [ "$type $command" == "query jobs" ] ; then
-			ids=()
-			for id in ${!jobs[@]}; do
-				ids+=($id)
-			done
-			ids=($(printf "%d\n" ${ids[@]} | sort -n))
+		elif [[ "$type $command" =~ $regex_query_jobs ]] ; then
+			ids=(${BASH_REMATCH[2]:-$(printf "%d\n" ${!jobs[@]} | sort -n)})
 			echo "$name << jobs = (${ids[@]})"
 			for id in ${ids[@]}; do
-				echo "$name << # $(printf %${#ids[-1]}d $id) {${jobs[$id]}}"
+				requester="${jobs[$id]%% *}"
+				command="${jobs[$id]#* }"
+				echo "$name << # request $(printf %${#ids[-1]}d $id) $requester {$command}"
 			done
 			log "accept query jobs from $name"
+
+		elif [[ "$type $command" =~ $regex_query_results ]] ; then
+			ids=(${BASH_REMATCH[2]:-$(printf "%d\n" ${!results[@]} | sort -n)})
+			echo "$name << results = (${ids[@]})"
+			for id in ${ids[@]}; do
+				code="${results[$id]%% *}"
+				output="${results[$id]#* }"
+				echo "$name << # response $(printf %${#ids[-1]}d $id) $code {$output}"
+			done
+			log "accept query results from $name"
 
 		elif [ "$type $command" == "query assign" ]; then
 			assignment=()
