@@ -42,7 +42,7 @@ register_worker() {
 		if [ "$reply" == "% name: $worker" ]; then
 			break
 		elif [[ "$reply" == "% failed name"* ]]; then
-			name=${worker%-*}-$((${worker##*-}+1))
+			worker=${worker%-*}-$((${worker##*-}+1))
 			echo "name $worker"
 		fi
 	done
@@ -85,7 +85,7 @@ handshake
 
 log "$worker setup completed successfully, start monitoring..."
 echo "$broker << state idle"
-log "state $next_state; notify $broker"
+log "state idle; notify $broker"
 
 declare -A jobs # [id]=command
 declare -A pids # [id]=PID
@@ -95,6 +95,7 @@ regex_request="^$broker >> request (\S+) \{(.+)\}$"
 regex_confirm_response="^$broker >> (accept|reject) response (\S+)$"
 regex_confirm_state="^$broker >> confirm state (idle|busy)$"
 regex_notification="^# (.+)$"
+regex_others="^(\S+) >> (operate|set|use|query) (.+)$"
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
@@ -139,6 +140,27 @@ while IFS= read -r message; do
 			(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
 			echo "$broker << state $next_state"
 			log "state $next_state; notify $broker"
+		fi
+
+	elif [[ $message =~ $regex_others ]]; then
+		name=${BASH_REMATCH[1]}
+		command=${BASH_REMATCH[2]}
+		options=${BASH_REMATCH[3]}
+
+		regex_set_broker="^set broker (\S+)$"
+
+		if [[ "$command $options" =~ $regex_set_broker ]]; then
+			broker=${BASH_REMATCH[1]}
+			echo "$name << confirm set broker $broker"
+			log "accept set broker $broker from $name"
+
+		elif [ "$command $options" == "operate shutdown" ]; then
+			echo "$name << confirm shutdown"
+			log "accept operate shutdown from $name"
+			exit 0
+
+		else
+			log "unknown $command $options from $name"
 		fi
 
 	else
