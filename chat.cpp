@@ -17,11 +17,14 @@
 class logger {
 public:
 	void log(const std::string& msg) const {
-		std::string info = current_time();
-		info.reserve(info.size() + msg.size() + 10);
-		info += ' ';
-		info += msg;
-		std::cerr << info << std::flush;
+		std::chrono::system_clock::time_point tp = std::chrono::system_clock::now();
+		time_t raw_time = std::chrono::system_clock::to_time_t(tp);
+		std::tm* timeinfo = std::localtime(&raw_time);
+		std::chrono::milliseconds ms = std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch());
+		std::stringstream ss;
+		ss << std::put_time(timeinfo, "%Y-%m-%d %H:%M:%S.") << std::setfill('0') << std::setw(3) << (ms.count() % 1000);
+		ss << ' ' << msg;
+		std::cerr << ss.rdbuf() << std::flush;
 	}
 
 	class ostream_adapter : public std::stringstream {
@@ -39,17 +42,6 @@ public:
 		ostream_adapter out(*this);
 		out << t;
 		return out;
-	}
-
-private:
-	std::string current_time() const {
-		std::chrono::system_clock::time_point tp = std::chrono::system_clock::now();
-		time_t raw_time = std::chrono::system_clock::to_time_t(tp);
-		std::tm* timeinfo = std::localtime(&raw_time);
-		std::chrono::milliseconds ms = std::chrono::duration_cast<std::chrono::milliseconds>(tp.time_since_epoch());
-		std::stringstream ss;
-		ss << std::put_time(timeinfo, "%Y-%m-%d %H:%M:%S.") << std::setfill('0') << std::setw(3) << (ms.count() % 1000);
-		return ss.str();
 	}
 } logger;
 
@@ -84,9 +76,9 @@ public:
 		std::shared_ptr<client> self;
 	};
 
-	ostream_adapter ostream() { return ostream_adapter(shared_from_this()); }
-	ostream_adapter ostream_reply() { auto out = ostream(); out << "% "; return out; }
-	ostream_adapter ostream_info() { auto out = ostream(); out << "# "; return out; }
+	ostream_adapter output() { return ostream_adapter(shared_from_this()); }
+	ostream_adapter reply() { auto out = output(); out << "% "; return out; }
+	ostream_adapter notify() { auto out = output(); out << "# "; return out; }
 
 public:
 	tcp::socket& socket() { return socket_; }
@@ -141,8 +133,10 @@ public:
 		acceptor_.async_accept(
 			[this](error_code ec, tcp::socket socket) {
 				if (!ec) {
-					auto name = "u" + std::to_string(++ticket_);
-					auto user = std::make_shared<client>(std::move(socket), name, this);
+					std::scoped_lock lock(clients_mutex_);
+					std::string name;
+					while (find_client(name = "u" + std::to_string(++ticket_)) != nullptr);
+					std::shared_ptr<client> user = std::make_shared<client>(std::move(socket), name, this);
 					handle_client_login(user);
 					user->async_read();
 				} else {
@@ -159,13 +153,13 @@ protected:
 			std::string who = line.substr(0, it);
 			std::string msg = line.substr(std::min(line.find_first_not_of('<', it), line.length()));
 			boost::trim(who);
-			boost::trim(msg);
+			msg.erase(0, msg.find(' ') ? 0 : 1);
 
 			std::shared_ptr<client> remote = find_client(who);
 			if (remote) {
-				remote->ostream() << boost::format("%s >> %s") % self->name() % msg << std::endl;
+				remote->output() << boost::format("%s >> %s") % self->name() % msg << std::endl;
 			} else {
-				self->ostream_reply() << boost::format("failed chat: invalid client") << std::endl;
+				self->reply() << boost::format("failed chat: invalid client") << std::endl;
 			}
 			return;
 		}
@@ -180,21 +174,17 @@ protected:
 			std::string old = self->name();
 
 			if (name.empty() || name == old) {
-				self->ostream_reply() << boost::format("name: %s") % self->name() << std::endl;
-				return;
-			}
-			auto legal = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/_.-";
-			if (name.find_first_not_of(legal) != std::string::npos) {
-				self->ostream_reply() << boost::format("failed name: invalid name") << std::endl;
-				return;
-			}
-			if (rename_client(self, name)) {
-				self->ostream_reply() << boost::format("name: %s") % self->name() << std::endl;
-				for (auto user : list_clients()) {
-					user->ostream_info() << boost::format("name: %s becomes %s") % old % name << std::endl;
-				}
+				self->reply() << boost::format("name: %s") % self->name() << std::endl;
 			} else {
-				self->ostream_reply() << boost::format("failed name: duplicate") << std::endl;
+				auto legal = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/_.-";
+				if (name.find_first_not_of(legal) == std::string::npos && rename_client(self, name)) {
+					self->reply() << boost::format("name: %s") % self->name() << std::endl;
+					for (auto user : list_clients()) {
+						user->notify() << boost::format("name: %s becomes %s") % old % name << std::endl;
+					}
+				} else {
+					self->reply() << boost::format("failed name: invalid or duplicate") << std::endl;
+				}
 			}
 
 		} else if (cmd == "who") {
@@ -202,17 +192,19 @@ protected:
 			parser >> name;
 
 			if (name.empty()) {
-				auto out = self->ostream_reply();
+				auto out = self->reply();
 				out << "who:";
 				for (auto user : list_clients()) out << ' ' << user->name();
 				out << std::endl;
 			} else {
 				std::shared_ptr<client> who = find_client(name);
 				if (who) {
-					tcp::endpoint endpoint = who->socket().remote_endpoint();
-					self->ostream_reply() << boost::format("who: %s from %s:%d") % name % endpoint.address() % endpoint.port() << std::endl;
+					error_code ec;
+					tcp::endpoint endpoint = who->socket().remote_endpoint(ec);
+					std::string from = !ec ? (boost::format("%s:%d") % endpoint.address() % endpoint.port()).str() : "unknown";
+					self->reply() << boost::format("who: %s from %s") % name % from << std::endl;
 				} else {
-					self->ostream_reply() << boost::format("failed who: invalid client") << std::endl;
+					self->reply() << boost::format("failed who: invalid client") << std::endl;
 				}
 			}
 
@@ -221,9 +213,9 @@ protected:
 			parser >> version;
 
 			if (version == "0") {
-				self->ostream_reply() << boost::format("protocol: %s") % version << std::endl;
+				self->reply() << boost::format("protocol: %s") % version << std::endl;
 			} else {
-				self->ostream_reply() << boost::format("failed protocol: unsupported") << std::endl;
+				self->reply() << boost::format("failed protocol: unsupported") << std::endl;
 			}
 
 		}
@@ -232,9 +224,11 @@ protected:
 		if (self == find_client(self->name())) {
 			if (ec == boost::system::errc::success || ec == boost::asio::error::eof) {
 			} else {
-				logger << boost::format("exception at async_read: %s") % ec << std::endl;
+				logger << boost::format("exception at read error: %s") % ec << std::endl;
 			}
 			handle_client_logout(self);
+		} else {
+			logger << boost::format("mismatched client %s on read error") % self->name() << std::endl;
 		}
 	}
 	virtual void handle_write_error(std::shared_ptr<client> self, const std::string& str, error_code ec) {
@@ -244,49 +238,58 @@ protected:
 				std::string msg = str.substr(str.find(" > ") + 3);
 				auto source = find_client(src);
 				if (source) {
-					source->ostream_reply() << boost::format("failed chat: remote error") << std::endl;
+					source->reply() << boost::format("failed chat: remote error") << std::endl;
 				}
 			}
-			logger << boost::format("exception at async_write: %s; %s") % ec % str << std::endl;
+			logger << boost::format("exception at write error: %s; %s") % ec % str << std::endl;
 			handle_client_logout(self);
+		} else {
+			logger << boost::format("mismatched client %s on write error") % self->name() << std::endl;
 		}
 	}
 protected:
 	void handle_client_login(std::shared_ptr<client> self) {
-		tcp::endpoint endpoint = self->socket().remote_endpoint();
-		logger << boost::format("login: %s %s:%d") % self->name() % endpoint.address() % endpoint.port() << std::endl;
-		insert_client(self);
-		for (auto user : list_clients()) {
-			user->ostream_info() << boost::format("login: %s") % self->name() << std::endl;
+		error_code ec;
+		tcp::endpoint endpoint = self->socket().remote_endpoint(ec);
+		std::string from = !ec ? (boost::format("%s:%d") % endpoint.address() % endpoint.port()).str() : "unknown";
+		if (insert_client(self)) {
+			logger << boost::format("login: %s %s") % self->name() % from << std::endl;
+			for (auto user : list_clients()) {
+				user->notify() << boost::format("login: %s") % self->name() << std::endl;
+			}
+		} else {
+			logger << boost::format("failed to insert client %s %s") % self->name() % from << std::endl;
 		}
 	}
 	void handle_client_logout(std::shared_ptr<client> self) {
-		tcp::endpoint endpoint = self->socket().remote_endpoint();
-		logger << boost::format("logout: %s %s:%d") % self->name() % endpoint.address() % endpoint.port() << std::endl;
-		remove_client(self);
-		for (auto user : list_clients()) {
-			user->ostream_info() << boost::format("logout: %s") % self->name() << std::endl;
+		error_code ec;
+		tcp::endpoint endpoint = self->socket().remote_endpoint(ec);
+		std::string from = !ec ? (boost::format("%s:%d") % endpoint.address() % endpoint.port()).str() : "unknown";
+		if (remove_client(self)) {
+			logger << boost::format("logout: %s %s") % self->name() % from << std::endl;
+			for (auto user : list_clients()) {
+				user->notify() << boost::format("logout: %s") % self->name() << std::endl;
+			}
+		} else {
+			logger << boost::format("failed to remove client %s %s") % self->name() % from << std::endl;
 		}
 	}
 private:
 	std::shared_ptr<client> find_client(const std::string& name) {
-		std::lock_guard<std::mutex> lock(clients_mutex_);
-		return find_client_unsafe(name);
-	}
-	std::shared_ptr<client> find_client_unsafe(const std::string& name) {
+		std::scoped_lock lock(clients_mutex_);
 		auto it = clients_.find(name);
 		return it != clients_.end() ? it->second : nullptr;
 	}
 	std::vector<std::shared_ptr<client>> list_clients() {
-		std::lock_guard<std::mutex> lock(clients_mutex_);
+		std::scoped_lock lock(clients_mutex_);
 		std::vector<std::shared_ptr<client>> users;
 		for (const auto& pair : clients_) users.push_back(pair.second);
 		return users;
 	}
 	bool rename_client(std::shared_ptr<client> user, const std::string& after) {
-		std::lock_guard<std::mutex> lock(clients_mutex_);
-		if (find_client_unsafe(user->name()) != user) return false;
-		if (find_client_unsafe(after) != nullptr) return false;
+		std::scoped_lock lock(clients_mutex_);
+		if (find_client(user->name()) != user) return false;
+		if (find_client(after) != nullptr) return false;
 		auto hdr = clients_.extract(user->name());
 		hdr.key() = after;
 		clients_.insert(std::move(hdr));
@@ -294,21 +297,21 @@ private:
 		return true;
 	}
 	bool insert_client(std::shared_ptr<client> user) {
-		std::lock_guard<std::mutex> lock(clients_mutex_);
-		if (find_client_unsafe(user->name()) != nullptr) return false;
+		std::scoped_lock lock(clients_mutex_);
+		if (find_client(user->name()) != nullptr) return false;
 		clients_.insert({user->name(), user});
 		return true;
 	}
 	bool remove_client(std::shared_ptr<client> user) {
-		std::lock_guard<std::mutex> lock(clients_mutex_);
-		if (find_client_unsafe(user->name()) != user) return false;
+		std::scoped_lock lock(clients_mutex_);
+		if (find_client(user->name()) != user) return false;
 		clients_.erase(user->name());
 		return true;
 	}
 private:
 	tcp::acceptor acceptor_;
 	std::map<std::string, std::shared_ptr<client>> clients_;
-	std::mutex clients_mutex_;
+	std::recursive_mutex clients_mutex_;
 	size_t ticket_ = 0;
 };
 
