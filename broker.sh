@@ -57,6 +57,8 @@ declare -A jobs # [id]=requester command
 declare -A results # [id]=code output
 declare -A assign # [id]=worker
 declare -A state # [worker]=idle|hold|busy
+declare -A news # [type-who]=subscribe
+declare -A notify # [type]=subscriber...
 queue=()
 
 regex_request="^(\S+) >> request (\{(.+)\}|(.+))$"
@@ -66,7 +68,7 @@ regex_worker_state="^(\S+) >> state (idle|busy)$"
 regex_notification="^# (.+)$"
 regex_rename="^# name: (\S+) becomes (\S+)$"
 regex_login_or_logout="^# (login|logout): (\S+)$"
-regex_others="^(\S+) >> (operate|set|use|query) (.+)$"
+regex_others="^(\S+) >> (operate|set|use|subscribe|query) (.+)$"
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
@@ -112,6 +114,9 @@ while IFS= read -r message; do
 		if [ "${state[$worker]}" != "$status" ]; then
 			state[$worker]=$status
 			log "confirm $worker state $status"
+			for subscriber in ${notify[$status]}; do
+				echo "$subscriber << notify $worker state $status"
+			done
 		fi
 
 	elif [[ $message =~ $regex_confirm ]]; then
@@ -150,16 +155,25 @@ while IFS= read -r message; do
 		if [[ $message =~ $regex_login_or_logout ]]; then
 			type=${BASH_REMATCH[1]}
 			name=${BASH_REMATCH[2]}
-			if [ "$type" == "logout" ] && [[ -v state[$name] ]]; then
+			if [ "$type" == "logout" ]; then
 				log "$name logged out"
-				for id in ${!assign[@]}; do
-					if [ "${assign[$id]}" == "$name" ]; then
-						unset assign[$id]
-						queue=($id ${queue[@]})
-						log "revoke assigned request $id; re-enqueue $id, queue = (${queue[@]})"
+				if [[ -v state[$name] ]]; then
+					for id in ${!assign[@]}; do
+						if [ "${assign[$id]}" == "$name" ]; then
+							unset assign[$id]
+							queue=($id ${queue[@]})
+							log "revoke assigned request $id; re-enqueue $id, queue = (${queue[@]})"
+						fi
+					done
+					unset state[$name]
+				fi
+				for item in ${!notify[@]}; do
+					if [[ " ${notify[$item]} " == *" $name "* ]]; then
+						notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
+						unset news[$item-$name]
+						log "cancel subscribed $item of $name"
 					fi
 				done
-				unset state[$name]
 			fi
 		fi
 
@@ -173,6 +187,7 @@ while IFS= read -r message; do
 		regex_query_results="^query (response|result)s?(.*)$"
 		regex_query_assign="^query (assign(ment)?|task)s?$"
 		regex_query_state="^query (state|worker)s?$"
+		regex_subscribe="^subscribe (cancel )?(idle|busy|assign)$"
 
 		if [ "$command $options" == "query protocol" ]; then
 			echo "$name << protocol 0"
@@ -228,10 +243,38 @@ while IFS= read -r message; do
 			echo "$name << state = (${status[@]})"
 			log "accept query state from $name"
 
+		elif [[ "$command $options" =~ $regex_subscribe ]]; then
+			item=$options
+			if ! [[ "$item" == "cancel "* ]]; then
+				notify[$item]=$(printf "%s\n" ${notify[$item]} $name | sort | uniq)
+				news[$item-$name]=subscribe
+				echo "$name << accept $command $options"
+				log "accept $command $options from $name"
+				for worker in ${!state[@]}; do
+					if [ "${state[$worker]}" == "$item" ]; then
+						echo "$name << notify $worker state $item"
+					fi
+				done
+			else
+				item=${item#* }
+				notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
+				unset news[$item-$name]
+				echo "$name << accept $command $options"
+				log "accept $command $options from $name"
+			fi
+
 		elif [ "$command $options" == "operate shutdown" ]; then
 			echo "$name << confirm shutdown"
 			log "accept operate shutdown from $name"
 			exit 0
+
+		elif [ "$command $options" == "operate restart" ]; then
+			echo "$name << confirm restart"
+			log "accept operate restart from $name"
+			log "$broker is restarting..."
+			log ""
+			echo "name ${broker}_${RANDOM}____"
+			exec "$0" "$@"
 
 		else
 			log "ignore $command $options from $name"
@@ -249,6 +292,10 @@ while IFS= read -r message; do
 			assign[$id]=$worker
 			queue=(${queue[@]:1})
 			log "assign request $id to $worker"
+			requester="${jobs[$id]%% *}"
+			if [[ -v news[assign-$requester] ]]; then
+				echo "$requester << notify assign request $id to $worker"
+			fi
 		fi
 	done
 done
