@@ -194,6 +194,10 @@ while IFS= read -r message; do
 					log "worker has been changed, register on the chat system again..."
 					register_worker
 					echo "$broker << use protocol 0"
+				elif [ "$var" == "num_jobs" ]; then
+					(( ${#jobs[@]} < ${num_jobs:-1} )) && next_state=idle || next_state=busy
+					echo "$broker << state $next_state"
+					log "state $next_state; notify $broker"
 				fi
 			fi
 
