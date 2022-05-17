@@ -3,7 +3,7 @@ log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 trap 'log "$worker is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "worker version 2022-05-16 (protocol 0)"
+	log "worker version 2022-05-17 (protocol 0)"
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
@@ -84,7 +84,7 @@ regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
 regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (\S+)$"
 regex_failed_chat="^% failed chat.*$"
 regex_notification="^# (.+)$"
-regex_others="^(\S+) >> (operate|set|use|query) (.+)$"
+regex_others="^(\S+) >> (operate|set|unset|use|query) (.+)$"
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
@@ -92,7 +92,7 @@ while IFS= read -r message; do
 		id=${BASH_REMATCH[2]}
 		command=${BASH_REMATCH[3]}
 		if [ "$requester" == "$broker" ]; then
-			if (( ${#jobs[@]} < $max_jobs )); then
+			if (( ${#jobs[@]} < ${max_jobs:-1} )); then
 				jobs[$id]=$command
 				echo "$broker << accept request $id"
 				log "accept request $id {$command} from $broker"
@@ -103,7 +103,7 @@ while IFS= read -r message; do
 				log "reject request $id {$command} from $broker since too many running requests"
 			fi
 
-			(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
+			(( ${#jobs[@]} < ${max_jobs:-1} )) && next_state=idle || next_state=busy
 			echo "$broker << state $next_state"
 			log "state $next_state; notify $broker"
 		else
@@ -119,7 +119,7 @@ while IFS= read -r message; do
 			unset jobs[$id] pids[$id]
 			log "$broker ${confirm}ed response $id"
 
-			(( ${#jobs[@]} < $max_jobs )) && next_state=idle || next_state=busy
+			(( ${#jobs[@]} < ${max_jobs:-1} )) && next_state=idle || next_state=busy
 			echo "$broker << state $next_state"
 			log "state $next_state; notify $broker"
 		else
@@ -159,6 +159,11 @@ while IFS= read -r message; do
 		if [ "$info" == "logout: $broker" ]; then
 			log "$broker disconnected, wait until $broker come back..."
 
+		elif [[ "$info" == "name: $broker becomes "* ]]; then
+			broker=${info##* }
+			log "broker has been changed, make handshake with $broker again..."
+			echo "$broker << use protocol 0"
+
 		elif [ "$info" == "login: $broker" ] || [[ "$info" == "name: "*" becomes $broker" ]]; then
 			log "$broker connected, make handshake with $broker..."
 			echo "$broker << use protocol 0"
@@ -172,13 +177,36 @@ while IFS= read -r message; do
 		command=${BASH_REMATCH[2]}
 		options=${BASH_REMATCH[3]}
 
-		regex_set_broker="^set broker (\S+)$"
+		regex_set="^set ([^= ]+)([= ].+)?$"
+		regex_unset="^unset ([^= ]+)$"
 
-		if [[ "$command $options" =~ $regex_set_broker ]]; then
-			broker=${BASH_REMATCH[1]}
-			echo "$name << confirm set broker $broker"
-			log "accept set broker $broker from $name, make handshake with $broker..."
-			echo "$broker << use protocol 0"
+		if [[ "$command $options" =~ $regex_set ]]; then
+			var=${BASH_REMATCH[1]}
+			val=${BASH_REMATCH[2]:1}
+			echo "$name << accept set ${var}${val:+ ${val}}"
+			declare val_old="${!var}" $var="$val"
+			log "accept set ${var}${val:+ as ${val}} from $name"
+			if [ "$val" != "$val_old" ]; then
+				if [ "$var" == "broker" ]; then
+					log "broker has been changed, make handshake with $broker again..."
+					echo "$broker << use protocol 0"
+				elif [ "$var" == "worker" ]; then
+					log "worker has been changed, register on the chat system again..."
+					register_worker
+					echo "$broker << use protocol 0"
+				fi
+			fi
+
+		elif [[ "$command $options" =~ $regex_unset ]]; then
+			var=${BASH_REMATCH[1]}
+			if [ "$var" ] && [ "$var" != "broker" ] && [ "$var" != "worker" ]; then
+				echo "$name << accept unset $var"
+				unset $var
+				log "accept unset $var from $name"
+
+			elif [ "$var" ]; then
+				echo "$name << reject unset $var"
+			fi
 
 		elif [ "$command $options" == "operate shutdown" ]; then
 			echo "$name << confirm shutdown"

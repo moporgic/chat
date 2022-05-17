@@ -3,7 +3,7 @@ log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 trap 'log "$broker is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "broker version 2022-05-16 (protocol 0)"
+	log "broker version 2022-05-17 (protocol 0)"
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
@@ -76,7 +76,7 @@ regex_worker_state="^(\S+) >> state (idle|busy)$"
 regex_notification="^# (.+)$"
 regex_rename="^# name: (\S+) becomes (\S+)$"
 regex_login_or_logout="^# (login|logout): (\S+)$"
-regex_others="^(\S+) >> (operate|set|use|subscribe|query) (.+)$"
+regex_others="^(\S+) >> (operate|set|unset|use|subscribe|query) (.+)$"
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
@@ -160,29 +160,40 @@ while IFS= read -r message; do
 		fi
 
 	elif [[ $message =~ $regex_notification ]]; then
+		unset unlink_name
+		if [[ $message =~ $regex_rename ]]; then
+			from_name=${BASH_REMATCH[1]}
+			to_name=${BASH_REMATCH[2]}
+			log "$from_name renamed as $to_name"
+			unlink_name=$from_name
+		fi
 		if [[ $message =~ $regex_login_or_logout ]]; then
 			type=${BASH_REMATCH[1]}
 			name=${BASH_REMATCH[2]}
 			if [ "$type" == "logout" ]; then
 				log "$name logged out"
-				if [[ -v state[$name] ]]; then
-					for id in ${!assign[@]}; do
-						if [ "${assign[$id]}" == "$name" ]; then
-							unset assign[$id]
-							queue=($id ${queue[@]})
-							log "revoke assigned request $id; re-enqueue $id, queue = (${queue[@]})"
-						fi
-					done
-					unset state[$name]
-				fi
-				for item in ${!notify[@]}; do
-					if [[ " ${notify[$item]} " == *" $name "* ]]; then
-						notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
-						unset news[$item-$name]
-						log "cancel subscribed $item of $name"
+				unlink_name=$name
+			fi
+		fi
+		if [ "$unlink_name" ]; then
+			name=$unlink_name
+			if [[ -v state[$name] ]]; then
+				for id in ${!assign[@]}; do
+					if [ "${assign[$id]}" == "$name" ]; then
+						unset assign[$id]
+						queue=($id ${queue[@]})
+						log "revoke assigned request $id; re-enqueue $id, queue = (${queue[@]})"
 					fi
 				done
+				unset state[$name]
 			fi
+			for item in ${!notify[@]}; do
+				if [[ " ${notify[$item]} " == *" $name "* ]]; then
+					notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
+					unset news[$item-$name]
+					log "cancel subscribed $item of $name"
+				fi
+			done
 		fi
 
 	elif [[ $message =~ $regex_others ]]; then
@@ -196,6 +207,8 @@ while IFS= read -r message; do
 		regex_query_assign="^query (assign(ment)?|task)s?$"
 		regex_query_state="^query (state|worker)s?$"
 		regex_subscribe="^subscribe (cancel )?(idle|busy|assign)$"
+		regex_set="^set ([^= ]+)([= ].+)?$"
+		regex_unset="^unset ([^= ]+)$"
 
 		if [ "$command $options" == "query protocol" ]; then
 			echo "$name << protocol 0"
@@ -269,6 +282,30 @@ while IFS= read -r message; do
 				unset news[$item-$name]
 				echo "$name << accept $command $options"
 				log "accept $command $options from $name"
+			fi
+
+		elif [[ "$command $options" =~ $regex_set ]]; then
+			var=${BASH_REMATCH[1]}
+			val=${BASH_REMATCH[2]:1}
+			echo "$name << accept set ${var}${val:+ ${val}}"
+			declare val_old="${!var}" $var="$val"
+			log "accept set ${var}${val:+ as ${val}} from $name"
+			if [ "$val" != "$val_old" ]; then
+				if [ "$var" == "broker" ]; then
+					log "broker has been changed, register on the chat system again..."
+					register_broker
+				fi
+			fi
+
+		elif [[ "$command $options" =~ $regex_unset ]]; then
+			var=${BASH_REMATCH[1]}
+			if [ "$var" ] && [ "$var" != "broker" ]; then
+				echo "$name << accept unset $var"
+				unset $var
+				log "accept unset $var from $name"
+
+			elif [ "$var" ]; then
+				echo "$name << reject unset $var"
 			fi
 
 		elif [ "$command $options" == "operate shutdown" ]; then
