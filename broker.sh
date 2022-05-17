@@ -76,7 +76,7 @@ regex_worker_state="^(\S+) >> state (idle|busy)$"
 regex_notification="^# (.+)$"
 regex_rename="^# name: (\S+) becomes (\S+)$"
 regex_login_or_logout="^# (login|logout): (\S+)$"
-regex_others="^(\S+) >> (operate|set|unset|use|subscribe|query) (.+)$"
+regex_others="^(\S+) >> (query|operate|set|unset|use|subscribe|unsubscribe) (.+)$"
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
@@ -191,7 +191,7 @@ while IFS= read -r message; do
 				if [[ " ${notify[$item]} " == *" $name "* ]]; then
 					notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
 					unset news[$item-$name]
-					log "cancel subscribed $item of $name"
+					log "unsubscribe $item for $name"
 				fi
 			done
 		fi
@@ -206,7 +206,7 @@ while IFS= read -r message; do
 		regex_query_results="^query (response|result)s?(.*)$"
 		regex_query_assign="^query (assign(ment)?|task)s?$"
 		regex_query_state="^query (state|worker)s?$"
-		regex_subscribe="^subscribe (cancel )?(idle|busy|assign)$"
+		regex_subscribe="^(subscribe|unsubscribe) (idle|busy|assign)$"
 		regex_set="^set ([^= ]+)([= ].+)?$"
 		regex_unset="^unset ([^= ]+)$"
 
@@ -266,7 +266,7 @@ while IFS= read -r message; do
 
 		elif [[ "$command $options" =~ $regex_subscribe ]]; then
 			item=$options
-			if ! [[ "$item" == "cancel "* ]]; then
+			if [ "$command" == "subscribe" ]; then
 				notify[$item]=$(printf "%s\n" ${notify[$item]} $name | sort | uniq)
 				news[$item-$name]=subscribe
 				echo "$name << accept $command $options"
@@ -276,7 +276,7 @@ while IFS= read -r message; do
 						echo "$name << notify $worker state $item"
 					fi
 				done
-			else
+			elif [ "$command" == "unsubscribe" ]; then
 				item=${item#* }
 				notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
 				unset news[$item-$name]
