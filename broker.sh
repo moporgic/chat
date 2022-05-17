@@ -22,7 +22,7 @@ elif [ "$1" == _NC ]; then
 fi
 
 broker=${broker:-broker}
-max_queued_jobs=${max_queued_jobs:-65536}
+queue_size=${queue_size:-65536}
 for var in "$@"; do declare "$var"; done
 
 verify_chat_system() {
@@ -82,7 +82,7 @@ while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
 		requester=${BASH_REMATCH[1]}
 		command=${BASH_REMATCH[3]:-${BASH_REMATCH[4]}}
-		if (( ${#queue[@]} < ${max_queued_jobs:-65536} )); then
+		if (( ${#queue[@]} < ${queue_size:-65536} )); then
 			id=$((++id_counter))
 			jobs[$id]="$requester $command"
 			queue+=($id)
@@ -319,7 +319,7 @@ while IFS= read -r message; do
 			log "$broker is restarting..."
 			log ""
 			echo "name ${broker}_$$__"
-			broker=$broker max_queued_jobs=$max_queued_jobs exec "$0" "$@"
+			broker=$broker queue_size=$queue_size exec "$0" "$@"
 
 		else
 			log "ignore $command $options from $name"

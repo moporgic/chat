@@ -23,7 +23,7 @@ fi
 
 broker=${broker:-broker}
 worker=${worker:-worker-1}
-max_jobs=${max_jobs:-1}
+num_jobs=${num_jobs:-1}
 for var in "$@"; do declare "$var"; done
 
 verify_chat_system() {
@@ -92,7 +92,7 @@ while IFS= read -r message; do
 		id=${BASH_REMATCH[2]}
 		command=${BASH_REMATCH[3]}
 		if [ "$requester" == "$broker" ]; then
-			if (( ${#jobs[@]} < ${max_jobs:-1} )); then
+			if (( ${#jobs[@]} < ${num_jobs:-1} )); then
 				jobs[$id]=$command
 				echo "$broker << accept request $id"
 				log "accept request $id {$command} from $broker"
@@ -103,7 +103,7 @@ while IFS= read -r message; do
 				log "reject request $id {$command} from $broker since too many running requests"
 			fi
 
-			(( ${#jobs[@]} < ${max_jobs:-1} )) && next_state=idle || next_state=busy
+			(( ${#jobs[@]} < ${num_jobs:-1} )) && next_state=idle || next_state=busy
 			echo "$broker << state $next_state"
 			log "state $next_state; notify $broker"
 		else
@@ -119,7 +119,7 @@ while IFS= read -r message; do
 			unset jobs[$id] pids[$id]
 			log "$broker ${confirm}ed response $id"
 
-			(( ${#jobs[@]} < ${max_jobs:-1} )) && next_state=idle || next_state=busy
+			(( ${#jobs[@]} < ${num_jobs:-1} )) && next_state=idle || next_state=busy
 			echo "$broker << state $next_state"
 			log "state $next_state; notify $broker"
 		else
@@ -219,7 +219,7 @@ while IFS= read -r message; do
 			log "$worker is restarting..."
 			log ""
 			echo "name ${worker}_$$__"
-			broker=$broker worker=$worker max_jobs=$max_jobs exec "$0" "$@"
+			broker=$broker worker=$worker num_jobs=$num_jobs exec "$0" "$@"
 
 		else
 			log "ignore $command $options from $name"
