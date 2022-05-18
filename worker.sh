@@ -3,7 +3,7 @@ log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 trap 'log "$worker is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "worker version 2022-05-17 (protocol 0)"
+	log "worker version 2022-05-18 (protocol 0)"
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
@@ -77,11 +77,12 @@ echo "$broker << use protocol 0"
 
 declare -A jobs # [id]=command
 declare -A pids # [id]=PID
-state=idle
+declare state=idle
 
 regex_request="^(\S+) >> request (\S+) \{(.+)\}$"
 regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
 regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (\S+)$"
+regex_terminate="^(\S+) >> terminate (\S+)$"
 regex_failed_chat="^% failed chat.*$"
 regex_notification="^# (.+)$"
 regex_others="^(\S+) >> (operate|set|unset|use|query) (.+)$"
@@ -151,6 +152,34 @@ while IFS= read -r message; do
 
 		else
 			log "ignore confirmation $confirm $what $option from $who"
+		fi
+
+	elif [[ $message =~ $regex_terminate ]]; then
+		who=${BASH_REMATCH[1]}
+		id=${BASH_REMATCH[2]}
+
+		if [ "$who" == "$broker" ]; then
+			if [[ -v pids[$id] ]]; then
+				if kill ${pids[$id]}; then
+					log "request $id {${jobs[$id]}} with pid ${pids[$id]} has been terminated"
+				else
+					log "request $id {${jobs[$id]}} with pid ${pids[$id]} may not be terminated"
+				fi
+				echo "$broker << accept terminate $id"
+				unset jobs[$id]
+				unset pids[$id]
+
+				(( ${#jobs[@]} < ${num_jobs:-1} )) && next_state=idle || next_state=busy
+				echo "$broker << state $next_state"
+				log "state $next_state; notify $broker"
+
+			else
+				echo "$who << reject terminate $id"
+				log "ignore terminate $id from $who since nonexistent request"
+			fi
+		else
+			echo "$who << reject terminate $id"
+			log "ignore terminate $id from $who since it is unauthorized"
 		fi
 
 	elif [[ $message =~ $regex_notification ]]; then

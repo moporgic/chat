@@ -3,7 +3,7 @@ log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 trap 'log "$broker is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "broker version 2022-05-17 (protocol 0)"
+	log "broker version 2022-05-18 (protocol 0)"
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
@@ -67,12 +67,13 @@ declare -A assign # [id]=worker
 declare -A state # [worker]=idle|hold|busy
 declare -A news # [type-who]=subscribe
 declare -A notify # [type]=subscriber...
-queue=()
+declare -a queue # id...
 
 regex_request="^(\S+) >> request (\{(.+)\}|(.+))$"
 regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
-regex_confirm="^(\S+) >> (accept|reject) (request|response) (\S+)$"
+regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
 regex_worker_state="^(\S+) >> state (idle|busy)$"
+regex_terminate="^(\S+) >> terminate (\S+)$"
 regex_notification="^# (.+)$"
 regex_rename="^# name: (\S+) becomes (\S+)$"
 regex_login_or_logout="^# (login|logout): (\S+)$"
@@ -139,17 +140,27 @@ while IFS= read -r message; do
 
 		if [ "$type" == "response" ]; then
 			who=${jobs[$id]%% *}
-		elif [ "$type" == "request" ]; then
+		elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
 			who=${assign[$id]}
 		fi
 
 		if [ "$who" == "$name" ]; then
-			if [ "$confirm" == "accept" ]; then
+			if [ "$type" == "terminate" ] && [[ -v jobs[$id] ]]; then
+				requester="${jobs[$id]%% *}"
+				echo "$requester << $confirm terminate $id"
+			fi
+
+			if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
 				if [ "$type" == "response" ]; then
 					unset jobs[$id]
 					unset results[$id]
+				elif [ "$type" == "terminate" ]; then
+					unset jobs[$id]
+					unset assign[$id]
+					unset results[$id]
 				fi
 				log "$name ${confirm}ed $type $id; confirm"
+
 			elif [ "$confirm" == "reject" ]; then
 				if [ "$type" == "request" ]; then
 					unset assign[$id]
@@ -157,6 +168,7 @@ while IFS= read -r message; do
 				queue=($id ${queue[@]})
 				log "$name ${confirm}ed $type $id; confirm and re-enqueue $id, queue = (${queue[@]})"
 			fi
+
 		elif [ "$who" ]; then
 			log "$name ${confirm}ed $type $id; ignore since it is owned by $who"
 		else
@@ -201,6 +213,14 @@ while IFS= read -r message; do
 					else
 						log "discard request $id"
 					fi
+					if [[ -v assign[$id] ]]; then
+						worker=${assign[$id]}
+						echo "$worker << terminate $id"
+						log "terminate assigned request $id on $worker"
+					else
+						queue=" ${queue[@]} "
+						queue=(${queue/ $id / })
+					fi
 				fi
 			done
 			for item in ${!notify[@]}; do
@@ -210,6 +230,25 @@ while IFS= read -r message; do
 					log "unsubscribe $item for $name"
 				fi
 			done
+		fi
+
+	elif [[ $message =~ $regex_terminate ]]; then
+		name=${BASH_REMATCH[1]}
+		id=${BASH_REMATCH[2]}
+
+		if [[ -v assign[$id] ]]; then
+			requester="${jobs[$id]%% *}"
+			if [ "$name" == "$requester" ]; then
+				worker=${assign[$id]}
+				echo "$worker << terminate $id"
+				log "accept terminate $id from $name and forward it to $worker"
+			else
+				echo "$name << reject terminate $id"
+				log "reject terminate $id from $name since it is owned by $requester"
+			fi
+		else
+			echo "$name << reject terminate $id"
+			log "reject terminate $id from $name since it is not assigned"
 		fi
 
 	elif [[ $message =~ $regex_others ]]; then
