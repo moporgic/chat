@@ -102,16 +102,20 @@ while IFS= read -r message; do
 		if [ "${assign[$id]}" == "$worker" ]; then
 			unset assign[$id]
 			echo "$worker << accept response $id"
-			requester="${jobs[$id]%% *}"
-			results[$id]="$code $output"
-			echo "$requester << response $id $code {$output}"
-			log "accept response $id $code {$output} from $worker and forward it to $requester"
+			if [[ -v jobs[$id] ]]; then
+				requester="${jobs[$id]%% *}"
+				results[$id]="$code $output"
+				echo "$requester << response $id $code {$output}"
+				log "accept response $id $code {$output} from $worker and forward it to $requester"
+			else
+				log "accept response $id $code {$output} from $worker (no such request)"
+			fi
 		else
 			echo "$worker << reject response $id"
 			if [ "${assign[$id]}" ]; then
 				log "reject response $id $code {$output} from $worker since it is owned by ${assign[$id]}"
 			else
-				log "reject response $id $code {$output} from $worker since no such request"
+				log "reject response $id $code {$output} from $worker since no such assignment"
 			fi
 		fi
 
@@ -187,6 +191,18 @@ while IFS= read -r message; do
 				done
 				unset state[$name]
 			fi
+			for id in ${!jobs[@]}; do
+				requester="${jobs[$id]%% *}"
+				if [ "$requester" == "$name" ]; then
+					unset jobs[$id]
+					if [[ -v results[$id] ]]; then
+						unset results[$id]
+						log "discard request $id and response $id"
+					else
+						log "discard request $id"
+					fi
+				fi
+			done
 			for item in ${!notify[@]}; do
 				if [[ " ${notify[$item]} " == *" $name "* ]]; then
 					notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
