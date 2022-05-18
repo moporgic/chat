@@ -26,36 +26,6 @@ worker=${worker:-worker-1}
 num_jobs=${num_jobs:-1}
 for var in "$@"; do declare "$var"; done
 
-verify_chat_system() {
-	log "verify chat system protocol..."
-	echo "protocol 0"
-	while IFS= read -r reply; do
-		if [ "$reply" == "% protocol: 0" ]; then
-			log "chat system verified protocol 0"
-			return
-		elif [[ "$reply" == "% failed protocol"* ]]; then
-			log "unsupported protocol; exit"
-			exit 1
-		fi
-	done
-	log "failed to verify protocol; exit"
-	exit 1
-}
-register_worker() {
-	log "register worker on the chat system..."
-	echo "name ${worker:=worker-1}"
-	while IFS= read -r reply; do
-		if [ "$reply" == "% name: $worker" ]; then
-			log "registered as $worker successfully"
-			return
-		elif [[ "$reply" == "% failed name"* ]]; then
-			worker=${worker%-*}-$((${worker##*-}+1))
-			echo "name $worker"
-		fi
-	done
-	log "failed to register worker; exit"
-	exit 2
-}
 execute() {
 	id=$1
 	command=${jobs[$id]}
@@ -69,11 +39,11 @@ execute() {
 	echo "$broker << response $id $code {$output}"
 }
 
-verify_chat_system
-register_worker
+log "verify chat system protocol..."
+echo "protocol 0"
 
-log "$worker setup completed successfully, make handshake with $broker..."
-echo "$broker << use protocol 0"
+log "register worker on the chat system..."
+echo "name ${worker:=worker-1}"
 
 declare -A jobs # [id]=command
 declare -A pids # [id]=PID
@@ -83,9 +53,10 @@ regex_request="^(\S+) >> request (\S+) \{(.+)\}$"
 regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
 regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (\S+)$"
 regex_terminate="^(\S+) >> terminate (\S+)$"
-regex_failed_chat="^% failed chat.*$"
-regex_notification="^# (.+)$"
 regex_others="^(\S+) >> (operate|set|unset|use|query) (.+)$"
+regex_chat_system="^(#|%) (.+)$"
+
+log "start monitoring input..."
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
@@ -182,24 +153,42 @@ while IFS= read -r message; do
 			log "ignore terminate $id from $who since it is unauthorized"
 		fi
 
-	elif [[ $message =~ $regex_notification ]]; then
-		info=${BASH_REMATCH[1]}
+	elif [[ $message =~ $regex_chat_system ]]; then
+		type=${BASH_REMATCH[1]}
+		info=${BASH_REMATCH[2]}
 
-		if [ "$info" == "logout: $broker" ]; then
-			log "$broker disconnected, wait until $broker come back..."
+		if [ "$type" == "#" ]; then
+			if [ "$info" == "logout: $broker" ]; then
+				log "$broker disconnected, wait until $broker come back..."
 
-		elif [[ "$info" == "name: $broker becomes "* ]]; then
-			broker=${info##* }
-			log "broker has been changed, make handshake with $broker again..."
-			echo "$broker << use protocol 0"
+			elif [[ "$info" == "name: $broker becomes "* ]]; then
+				broker=${info##* }
+				log "broker has been changed, make handshake with $broker again..."
+				echo "$broker << use protocol 0"
 
-		elif [ "$info" == "login: $broker" ] || [[ "$info" == "name: "*" becomes $broker" ]]; then
-			log "$broker connected, make handshake with $broker..."
-			echo "$broker << use protocol 0"
+			elif [ "$info" == "login: $broker" ] || [[ "$info" == "name: "*" becomes $broker" ]]; then
+				log "$broker connected, make handshake with $broker..."
+				echo "$broker << use protocol 0"
+			fi
+		elif [ "$type" == "%" ]; then
+			if [[ "$info" == "protocol"* ]]; then
+				log "chat system verified protocol 0"
+			elif [[ "$info" == "failed protocol"* ]]; then
+				log "unsupported protocol; exit"
+				exit 1
+			elif [[ "$info" == "name"* ]]; then
+				log "registered as $broker successfully"
+				log "make handshake with $broker..."
+				echo "$broker << use protocol 0"
+			elif [[ "$info" == "failed name"* ]]; then
+				occupied=$worker
+				worker=${worker%-*}-$((${worker##*-}+1))
+				echo "name $worker"
+				log "worker name $occupied is occupied, try register $worker on the chat system..."
+			elif [[ "$info" == "failed chat"* ]]; then
+				log "$broker disconnected? wait until $broker come back..."
+			fi
 		fi
-
-	elif [[ $message =~ $regex_failed_chat ]]; then
-		log "$broker disconnected, wait until $broker come back..."
 
 	elif [[ $message =~ $regex_others ]]; then
 		name=${BASH_REMATCH[1]}
@@ -220,9 +209,8 @@ while IFS= read -r message; do
 					log "broker has been changed, make handshake with $broker again..."
 					echo "$broker << use protocol 0"
 				elif [ "$var" == "worker" ]; then
-					log "worker has been changed, register on the chat system again..."
-					register_worker
-					echo "$broker << use protocol 0"
+					log "worker name has been changed, register $worker on the chat system..."
+					echo "name ${worker:=worker-1}"
 				elif [ "$var" == "num_jobs" ]; then
 					(( ${#jobs[@]} < ${num_jobs:-1} )) && next_state=idle || next_state=busy
 					echo "$broker << state $next_state"
@@ -251,7 +239,6 @@ while IFS= read -r message; do
 			log "accept operate restart from $name"
 			log "$worker is restarting..."
 			>&2 echo
-			echo "name ${worker}_$$__"
 			broker=$broker worker=$worker num_jobs=$num_jobs exec "$0" "$@"
 
 		else

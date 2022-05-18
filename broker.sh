@@ -25,41 +25,11 @@ broker=${broker:-broker}
 queue_size=${queue_size:-65536}
 for var in "$@"; do declare "$var"; done
 
-verify_chat_system() {
-	log "verify chat system protocol..."
-	echo "protocol 0"
-	while IFS= read -r reply; do
-		if [ "$reply" == "% protocol: 0" ]; then
-			log "chat system verified protocol 0"
-			return
-		elif [[ "$reply" == "% failed protocol"* ]]; then
-			log "unsupported protocol; exit"
-			exit 1
-		fi
-	done
-	log "failed to verify protocol; exit"
-	exit 1
-}
-register_broker() {
-	log "register $broker on the chat system..."
-	echo "name $broker"
-	while IFS= read -r reply; do
-		if [ "$reply" == "% name: $broker" ]; then
-			log "registered as $broker successfully"
-			return
-		elif [[ "$reply" == "% failed name"* ]]; then
-			log "another $broker is already running? exit"
-			exit 2
-		fi
-	done
-	log "failed to register $broker; exit"
-	exit 2
-}
+log "verify chat system protocol..."
+echo "protocol 0"
 
-verify_chat_system
-register_broker
-
-log "$broker setup completed successfully, start monitoring..."
+log "register $broker on the chat system..."
+echo "name $broker"
 
 declare -A jobs # [id]=requester command
 declare -A results # [id]=code output
@@ -74,10 +44,10 @@ regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
 regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
 regex_worker_state="^(\S+) >> state (idle|busy)$"
 regex_terminate="^(\S+) >> terminate (\S+)$"
-regex_notification="^# (.+)$"
-regex_rename="^# name: (\S+) becomes (\S+)$"
-regex_login_or_logout="^# (login|logout): (\S+)$"
 regex_others="^(\S+) >> (query|operate|set|unset|use|subscribe|unsubscribe) (.+)$"
+regex_chat_system="^(#|%) (.+)$"
+
+log "start monitoring input..."
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
@@ -175,61 +145,82 @@ while IFS= read -r message; do
 			log "$name ${confirm}ed $type $id; ignore since no such $type"
 		fi
 
-	elif [[ $message =~ $regex_notification ]]; then
-		unset unlink_name
-		if [[ $message =~ $regex_rename ]]; then
-			from_name=${BASH_REMATCH[1]}
-			to_name=${BASH_REMATCH[2]}
-			log "$from_name renamed as $to_name"
-			unlink_name=$from_name
-		fi
-		if [[ $message =~ $regex_login_or_logout ]]; then
-			type=${BASH_REMATCH[1]}
-			name=${BASH_REMATCH[2]}
-			if [ "$type" == "logout" ]; then
-				log "$name logged out"
-				unlink_name=$name
+	elif [[ $message =~ $regex_chat_system ]]; then
+		type=${BASH_REMATCH[1]}
+		message=${BASH_REMATCH[2]}
+
+		if [ "$type" == "#" ]; then
+			regex_rename="^name: (\S+) becomes (\S+)$"
+			regex_login_or_logout="^(login|logout): (\S+)$"
+
+			unset unlink_name
+			if [[ $message =~ $regex_rename ]]; then
+				from_name=${BASH_REMATCH[1]}
+				to_name=${BASH_REMATCH[2]}
+				log "$from_name renamed as $to_name"
+				unlink_name=$from_name
 			fi
-		fi
-		if [ "$unlink_name" ]; then
-			name=$unlink_name
-			if [[ -v state[$name] ]]; then
-				for id in ${!assign[@]}; do
-					if [ "${assign[$id]}" == "$name" ]; then
-						unset assign[$id]
-						queue=($id ${queue[@]})
-						log "revoke assigned request $id; re-enqueue $id, queue = (${queue[@]})"
+			if [[ $message =~ $regex_login_or_logout ]]; then
+				type=${BASH_REMATCH[1]}
+				name=${BASH_REMATCH[2]}
+				if [ "$type" == "logout" ]; then
+					log "$name logged out"
+					unlink_name=$name
+				fi
+			fi
+			if [ "$unlink_name" ]; then
+				name=$unlink_name
+				if [[ -v state[$name] ]]; then
+					for id in ${!assign[@]}; do
+						if [ "${assign[$id]}" == "$name" ]; then
+							unset assign[$id]
+							queue=($id ${queue[@]})
+							log "revoke assigned request $id; re-enqueue $id, queue = (${queue[@]})"
+						fi
+					done
+					unset state[$name]
+				fi
+				for id in ${!jobs[@]}; do
+					requester="${jobs[$id]%% *}"
+					if [ "$requester" == "$name" ]; then
+						unset jobs[$id]
+						if [[ -v results[$id] ]]; then
+							unset results[$id]
+							log "discard request $id and response $id"
+						else
+							log "discard request $id"
+						fi
+						if [[ -v assign[$id] ]]; then
+							worker=${assign[$id]}
+							echo "$worker << terminate $id"
+							log "terminate assigned request $id on $worker"
+						else
+							queue=" ${queue[@]} "
+							queue=(${queue/ $id / })
+						fi
 					fi
 				done
-				unset state[$name]
+				for item in ${!notify[@]}; do
+					if [[ " ${notify[$item]} " == *" $name "* ]]; then
+						notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
+						unset news[$item-$name]
+						log "unsubscribe $item for $name"
+					fi
+				done
 			fi
-			for id in ${!jobs[@]}; do
-				requester="${jobs[$id]%% *}"
-				if [ "$requester" == "$name" ]; then
-					unset jobs[$id]
-					if [[ -v results[$id] ]]; then
-						unset results[$id]
-						log "discard request $id and response $id"
-					else
-						log "discard request $id"
-					fi
-					if [[ -v assign[$id] ]]; then
-						worker=${assign[$id]}
-						echo "$worker << terminate $id"
-						log "terminate assigned request $id on $worker"
-					else
-						queue=" ${queue[@]} "
-						queue=(${queue/ $id / })
-					fi
-				fi
-			done
-			for item in ${!notify[@]}; do
-				if [[ " ${notify[$item]} " == *" $name "* ]]; then
-					notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
-					unset news[$item-$name]
-					log "unsubscribe $item for $name"
-				fi
-			done
+
+		elif [ "$type" == "%" ]; then
+			if [[ "$message" == "protocol"* ]]; then
+				log "chat system verified protocol 0"
+			elif [[ "$message" == "failed protocol"* ]]; then
+				log "unsupported protocol; exit"
+				exit 1
+			elif [[ "$message" == "name"* ]]; then
+				log "registered as $broker successfully"
+			elif [[ "$message" == "failed name"* ]]; then
+				log "another $broker is already running? exit"
+				exit 2
+			fi
 		fi
 
 	elif [[ $message =~ $regex_terminate ]]; then
@@ -348,8 +339,8 @@ while IFS= read -r message; do
 			log "accept set ${var}${val:+ as ${val}} from $name"
 			if [ "$val" != "$val_old" ]; then
 				if [ "$var" == "broker" ]; then
-					log "broker has been changed, register on the chat system again..."
-					register_broker
+					log "broker name has been changed, register $broker on the chat system..."
+					echo "name $broker"
 				fi
 			fi
 
@@ -388,9 +379,11 @@ while IFS= read -r message; do
 				if [ "$type" == "shutdown" ]; then
 					exit 0
 				elif [ "$type" == "restart" ]; then
+					for worker in ${!state[@]}; do
+						echo "$worker << accept protocol 0"
+					done
 					log "$broker is restarting..."
 					>&2 echo
-					echo "name ${broker}_$$__"
 					broker=$broker queue_size=$queue_size exec "$0" "$@"
 				fi
 			fi
