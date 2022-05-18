@@ -245,7 +245,7 @@ while IFS= read -r message; do
 			log "accept query queue from $name"
 
 		elif [[ "$command $options" =~ $regex_query_jobs ]] ; then
-			ids=(${BASH_REMATCH[2]:-$(printf "%d\n" ${!jobs[@]} | sort -n)})
+			ids=(${BASH_REMATCH[2]:-$(<<< ${!jobs[@]} xargs -r printf "%d\n" | sort -n)})
 			echo "$name << jobs = (${ids[@]})"
 			for id in ${ids[@]}; do
 				requester="${jobs[$id]%% *}"
@@ -255,7 +255,7 @@ while IFS= read -r message; do
 			log "accept query jobs from $name"
 
 		elif [[ "$command $options" =~ $regex_query_results ]] ; then
-			ids=(${BASH_REMATCH[2]:-$(printf "%d\n" ${!results[@]} | sort -n)})
+			ids=(${BASH_REMATCH[2]:-$(<<< ${!results[@]} xargs -r printf "%d\n" | sort -n)})
 			echo "$name << results = (${ids[@]})"
 			for id in ${ids[@]}; do
 				code="${results[$id]%% *}"
@@ -294,7 +294,7 @@ while IFS= read -r message; do
 				done
 			elif [ "$command" == "unsubscribe" ]; then
 				item=${item#* }
-				notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
+				notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${name}$/d")
 				unset news[$item-$name]
 				echo "$name << accept $command $options"
 				log "accept $command $options from $name"
