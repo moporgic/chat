@@ -264,6 +264,7 @@ while IFS= read -r message; do
 		regex_subscribe="^(subscribe|unsubscribe) (idle|busy|assign)$"
 		regex_set="^set ([^= ]+)([= ].+)?$"
 		regex_unset="^unset ([^= ]+)$"
+		regex_operate_power="^operate (shutdown|restart) ?(.*)$"
 
 		if [ "$command $options" == "query protocol" ]; then
 			echo "$name << protocol 0"
@@ -363,18 +364,36 @@ while IFS= read -r message; do
 				echo "$name << reject unset $var"
 			fi
 
-		elif [ "$command $options" == "operate shutdown" ]; then
-			echo "$name << confirm shutdown"
-			log "accept operate shutdown from $name"
-			exit 0
+		elif [[ "$command $options" =~ $regex_operate_power ]]; then
+			type=${BASH_REMATCH[1]}
+			targets=()
+			for match in "${BASH_REMATCH[2]:-$broker}"; do
+				for client in ${!state[@]} $broker; do
+					if [[ $client == $match ]]; then
+						targets+=($client)
+					fi
+				done
+			done
 
-		elif [ "$command $options" == "operate restart" ]; then
-			echo "$name << confirm restart"
-			log "accept operate restart from $name"
-			log "$broker is restarting..."
-			log ""
-			echo "name ${broker}_$$__"
-			broker=$broker queue_size=$queue_size exec "$0" "$@"
+			for target in ${targets[@]}; do
+				if [[ -v state[$target] ]]; then
+					echo "$name << confirm $type $target"
+					log "accept operate $type on $target from $name"
+					echo "$target << operate $type"
+				fi
+			done
+			if [[ " ${targets[@]} " == *" $broker "* ]]; then
+				echo "$name << confirm $type $broker"
+				log "accept operate $type on $broker from $name"
+				if [ "$type" == "shutdown" ]; then
+					exit 0
+				elif [ "$type" == "restart" ]; then
+					log "$broker is restarting..."
+					>&2 echo
+					echo "name ${broker}_$$__"
+					broker=$broker queue_size=$queue_size exec "$0" "$@"
+				fi
+			fi
 
 		else
 			log "ignore $command $options from $name"

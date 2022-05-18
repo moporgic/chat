@@ -250,7 +250,7 @@ while IFS= read -r message; do
 			echo "$name << confirm restart"
 			log "accept operate restart from $name"
 			log "$worker is restarting..."
-			log ""
+			>&2 echo
 			echo "name ${worker}_$$__"
 			broker=$broker worker=$worker num_jobs=$num_jobs exec "$0" "$@"
 
