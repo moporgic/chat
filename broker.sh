@@ -9,7 +9,7 @@ if [ "$1" != _NC ]; then
 		port=${BASH_REMATCH[2]}
 		shift
 		log "connect to chat system at $addr:$port..."
-		fifo=$(mktemp -u /tmp/broker.XXXXXXXX)
+		fifo=$(mktemp -u --suffix .fifo $(basename -s .sh "$0").XXXXXXXX)
 		mkfifo $fifo
 		trap "rm -f $fifo;" EXIT
 		nc $addr $port < $fifo | "$0" _NC "$@" > $fifo && exit 0
