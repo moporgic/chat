@@ -1,6 +1,6 @@
 #!/bin/bash
 log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
-trap 'log "$broker is terminated";' EXIT
+trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
 	log "broker version 2022-05-18 (protocol 0)"
@@ -413,3 +413,4 @@ while IFS= read -r message; do
 done
 
 log "message input is terminated, chat system is down?"
+exit 16
