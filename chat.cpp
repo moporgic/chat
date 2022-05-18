@@ -105,12 +105,12 @@ public:
 
 	void async_write(const std::string& data) {
 		auto self(shared_from_this());
-		auto buffer_(std::make_shared<std::string>(data));
-		boost::asio::async_write(socket_, boost::asio::buffer(*buffer_),
-			[this, self, buffer_](error_code ec, size_t n) {
+		auto buffer(std::make_shared<std::string>(data));
+		boost::asio::async_write(socket_, boost::asio::buffer(*buffer),
+			[this, self, buffer](error_code ec, size_t n) {
 				if (!ec) {
 				} else {
-					handler_->handle_write_error(self, *buffer_, ec);
+					handler_->handle_write_error(self, *buffer, ec);
 				}
 			});
 	}
@@ -134,6 +134,8 @@ public:
 		acceptor_.async_accept(
 			[this](error_code ec, tcp::socket socket) {
 				if (!ec) {
+					boost::asio::socket_base::keep_alive option(true);
+					socket.set_option(option);
 					std::scoped_lock lock(clients_mutex_);
 					std::string name;
 					while (find_client(name = "u" + std::to_string(++ticket_)) != nullptr);
