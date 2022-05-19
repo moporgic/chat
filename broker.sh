@@ -40,7 +40,7 @@ declare -A news # [type-who]=subscribe
 declare -A notify # [type]=subscriber...
 declare -a queue # id...
 
-regex_request="^(\S+) >> request (\{(.+)\}|(.+))$"
+regex_request="^(\S+) >> request (\{(.+)\}( with ([^{}]*))?|(.+))$"
 regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
 regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
 regex_worker_state="^(\S+) >> state (idle|busy)$"
@@ -53,7 +53,8 @@ log "start monitoring input..."
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
 		requester=${BASH_REMATCH[1]}
-		command=${BASH_REMATCH[3]:-${BASH_REMATCH[4]}}
+		command=${BASH_REMATCH[3]:-${BASH_REMATCH[6]}}
+		options=${BASH_REMATCH[5]}
 		if (( ${#queue[@]} < ${queue_size:-65536} )); then
 			id=$((++id_counter))
 			jobs[$id]="$requester $command"
