@@ -3,7 +3,8 @@ log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "broker version 2022-05-18 (protocol 0)"
+	log "broker version 2022-05-19 (protocol 0)"
+	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
