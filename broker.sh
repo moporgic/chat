@@ -237,9 +237,15 @@ while IFS= read -r message; do
 				echo "$name << reject terminate $id"
 				log "reject terminate $id from $name since it is owned by $requester"
 			fi
+		elif [[ -v jobs[$id] ]]; then
+			queue=" ${queue[@]} "
+			queue=(${queue/ $id / })
+			unset jobs[$id]
+			echo "$name << accept terminate $id"
+			log "accept terminate $id from $name and remove it from queue"
 		else
 			echo "$name << reject terminate $id"
-			log "reject terminate $id from $name since it is not assigned"
+			log "reject terminate $id from $name since it is nonexistent"
 		fi
 
 	elif [[ $message =~ $regex_others ]]; then
