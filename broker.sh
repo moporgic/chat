@@ -32,8 +32,9 @@ echo "protocol 0"
 log "register $broker on the chat system..."
 echo "name $broker"
 
-declare -A jobs # [id]=requester command
-declare -A results # [id]=code output
+declare -A own # [id]=requester
+declare -A cmd # [id]=command
+declare -A result # [id]=code output
 declare -A assign # [id]=worker
 declare -A state # [worker]=idle|hold|busy
 declare -A news # [type-who]=subscribe
@@ -57,7 +58,8 @@ while IFS= read -r message; do
 		options=${BASH_REMATCH[5]}
 		if (( ${#queue[@]} < ${queue_size:-65536} )); then
 			id=$((++id_counter))
-			jobs[$id]="$requester $command"
+			own[$id]=$requester
+			cmd[$id]=$command
 			queue+=($id)
 			echo "$requester << accept request $id {$command}"
 			log "accept request $id {$command} from $requester and enqueue $id, queue = (${queue[@]})"
@@ -75,11 +77,10 @@ while IFS= read -r message; do
 		if [ "${assign[$id]}" == "$worker" ]; then
 			unset assign[$id]
 			echo "$worker << accept response $id"
-			if [[ -v jobs[$id] ]]; then
-				requester="${jobs[$id]%% *}"
-				results[$id]="$code $output"
-				echo "$requester << response $id $code {$output}"
-				log "accept response $id $code {$output} from $worker and forward it to $requester"
+			if [[ -v cmd[$id] ]]; then
+				result[$id]="$code $output"
+				echo "${own[$id]} << response $id $code {$output}"
+				log "accept response $id $code {$output} from $worker and forward it to ${own[$id]}"
 			else
 				log "accept response $id $code {$output} from $worker (no such request)"
 			fi
@@ -111,25 +112,21 @@ while IFS= read -r message; do
 		id=${BASH_REMATCH[4]}
 
 		if [ "$type" == "response" ]; then
-			who=${jobs[$id]%% *}
+			who=${own[$id]}
 		elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
 			who=${assign[$id]}
 		fi
 
 		if [ "$who" == "$name" ]; then
-			if [ "$type" == "terminate" ] && [[ -v jobs[$id] ]]; then
-				requester="${jobs[$id]%% *}"
-				echo "$requester << $confirm terminate $id"
+			if [ "$type" == "terminate" ] && [[ -v own[$id] ]]; then
+				echo "${own[$id]} << $confirm terminate $id"
 			fi
 
 			if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
 				if [ "$type" == "response" ]; then
-					unset jobs[$id]
-					unset results[$id]
+					unset cmd[$id] own[$id] result[$id]
 				elif [ "$type" == "terminate" ]; then
-					unset jobs[$id]
-					unset assign[$id]
-					unset results[$id]
+					unset cmd[$id] own[$id] assign[$id] result[$id]
 				fi
 				log "$name ${confirm}ed $type $id; confirm"
 
@@ -157,10 +154,10 @@ while IFS= read -r message; do
 
 			unset unlink_name
 			if [[ $message =~ $regex_rename ]]; then
-				from_name=${BASH_REMATCH[1]}
-				to_name=${BASH_REMATCH[2]}
-				log "$from_name renamed as $to_name"
-				unlink_name=$from_name
+				old_name=${BASH_REMATCH[1]}
+				new_name=${BASH_REMATCH[2]}
+				log "$old_name renamed as $new_name"
+				unlink_name=$old_name
 			fi
 			if [[ $message =~ $regex_login_or_logout ]]; then
 				type=${BASH_REMATCH[1]}
@@ -182,20 +179,18 @@ while IFS= read -r message; do
 					done
 					unset state[$name]
 				fi
-				for id in ${!jobs[@]}; do
-					requester="${jobs[$id]%% *}"
-					if [ "$requester" == "$name" ]; then
-						unset jobs[$id]
-						if [[ -v results[$id] ]]; then
-							unset results[$id]
+				for id in ${!own[@]}; do
+					if [ "${own[$id]}" == "$name" ]; then
+						unset cmd[$id] own[$id]
+						if [[ -v result[$id] ]]; then
+							unset result[$id]
 							log "discard request $id and response $id"
 						else
 							log "discard request $id"
 						fi
 						if [[ -v assign[$id] ]]; then
-							worker=${assign[$id]}
-							echo "$worker << terminate $id"
-							log "terminate assigned request $id on $worker"
+							echo "${assign[$id]} << terminate $id"
+							log "terminate assigned request $id on ${assign[$id]}"
 						else
 							queue=" ${queue[@]} "
 							queue=(${queue/ $id / })
@@ -230,19 +225,17 @@ while IFS= read -r message; do
 		id=${BASH_REMATCH[2]}
 
 		if [[ -v assign[$id] ]]; then
-			requester="${jobs[$id]%% *}"
-			if [ "$name" == "$requester" ]; then
-				worker=${assign[$id]}
-				echo "$worker << terminate $id"
-				log "accept terminate $id from $name and forward it to $worker"
+			if [ "$name" == "${own[$id]}" ]; then
+				echo "${assign[$id]} << terminate $id"
+				log "accept terminate $id from $name and forward it to ${assign[$id]}"
 			else
 				echo "$name << reject terminate $id"
-				log "reject terminate $id from $name since it is owned by $requester"
+				log "reject terminate $id from $name since it is owned by ${own[$id]}"
 			fi
-		elif [[ -v jobs[$id] ]]; then
+		elif [[ -v cmd[$id] ]]; then
 			queue=" ${queue[@]} "
 			queue=(${queue/ $id / })
-			unset jobs[$id]
+			unset cmd[$id] own[$id]
 			echo "$name << accept terminate $id"
 			log "accept terminate $id from $name and remove it from queue"
 		else
@@ -284,21 +277,19 @@ while IFS= read -r message; do
 			log "accept query queue from $name"
 
 		elif [[ "$command $options" =~ $regex_query_jobs ]] ; then
-			ids=(${BASH_REMATCH[2]:-$(<<< ${!jobs[@]} xargs -r printf "%d\n" | sort -n)})
+			ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
 			echo "$name << jobs = (${ids[@]})"
 			for id in ${ids[@]}; do
-				requester="${jobs[$id]%% *}"
-				options="${jobs[$id]#* }"
-				echo "$name << # request $(printf %${#ids[-1]}d $id) $requester {$options}"
+				echo "$name << # request $(printf %${#ids[-1]}d $id) ${own[$id]} {${cmd[$id]}}"
 			done
 			log "accept query jobs from $name"
 
 		elif [[ "$command $options" =~ $regex_query_results ]] ; then
-			ids=(${BASH_REMATCH[2]:-$(<<< ${!results[@]} xargs -r printf "%d\n" | sort -n)})
+			ids=(${BASH_REMATCH[2]:-$(<<< ${!result[@]} xargs -r printf "%d\n" | sort -n)})
 			echo "$name << results = (${ids[@]})"
 			for id in ${ids[@]}; do
-				code="${results[$id]%% *}"
-				output="${results[$id]#* }"
+				code=${result[$id]%% *}
+				output=${result[$id]#* }
 				echo "$name << # response $(printf %${#ids[-1]}d $id) $code {$output}"
 			done
 			log "accept query results from $name"
@@ -332,7 +323,6 @@ while IFS= read -r message; do
 					fi
 				done
 			elif [ "$command" == "unsubscribe" ]; then
-				item=${item#* }
 				notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${name}$/d")
 				unset news[$item-$name]
 				echo "$name << accept $command $options"
@@ -407,14 +397,13 @@ while IFS= read -r message; do
 	for worker in ${!state[@]}; do
 		if (( ${#queue[@]} )) && [ "${state[$worker]}" == "idle" ]; then
 			id=${queue[0]}
-			echo "$worker << request $id {${jobs[$id]#* }}"
+			echo "$worker << request $id {${cmd[$id]}}"
 			state[$worker]="hold"
 			assign[$id]=$worker
 			queue=(${queue[@]:1})
 			log "assign request $id to $worker"
-			requester="${jobs[$id]%% *}"
-			if [[ -v news[assign-$requester] ]]; then
-				echo "$requester << notify assign request $id to $worker"
+			if [[ -v news[assign-${own[$id]}] ]]; then
+				echo "${own[$id]} << notify assign request $id to $worker"
 			fi
 		fi
 	done
