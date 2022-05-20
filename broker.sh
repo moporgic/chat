@@ -34,7 +34,7 @@ echo "name $broker"
 
 declare -A own # [id]=requester
 declare -A cmd # [id]=command
-declare -A result # [id]=code output
+declare -A res # [id]=code;output
 declare -A assign # [id]=worker
 declare -A state # [worker]=idle|hold|busy
 declare -A news # [type-who]=subscribe
@@ -78,7 +78,7 @@ while IFS= read -r message; do
 			unset assign[$id]
 			echo "$worker << accept response $id"
 			if [[ -v cmd[$id] ]]; then
-				result[$id]="$code $output"
+				res[$id]=$code;$output
 				echo "${own[$id]} << response $id $code {$output}"
 				log "accept response $id $code {$output} from $worker and forward it to ${own[$id]}"
 			else
@@ -124,9 +124,9 @@ while IFS= read -r message; do
 
 			if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
 				if [ "$type" == "response" ]; then
-					unset cmd[$id] own[$id] result[$id]
+					unset cmd[$id] own[$id] res[$id]
 				elif [ "$type" == "terminate" ]; then
-					unset cmd[$id] own[$id] assign[$id] result[$id]
+					unset cmd[$id] own[$id] assign[$id] res[$id]
 				fi
 				log "$name ${confirm}ed $type $id; confirm"
 
@@ -182,8 +182,8 @@ while IFS= read -r message; do
 				for id in ${!own[@]}; do
 					if [ "${own[$id]}" == "$name" ]; then
 						unset cmd[$id] own[$id]
-						if [[ -v result[$id] ]]; then
-							unset result[$id]
+						if [[ -v res[$id] ]]; then
+							unset res[$id]
 							log "discard request $id and response $id"
 						else
 							log "discard request $id"
@@ -285,12 +285,10 @@ while IFS= read -r message; do
 			log "accept query jobs from $name"
 
 		elif [[ "$command $options" =~ $regex_query_results ]] ; then
-			ids=(${BASH_REMATCH[2]:-$(<<< ${!result[@]} xargs -r printf "%d\n" | sort -n)})
+			ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
 			echo "$name << results = (${ids[@]})"
 			for id in ${ids[@]}; do
-				code=${result[$id]%% *}
-				output=${result[$id]#* }
-				echo "$name << # response $(printf %${#ids[-1]}d $id) $code {$output}"
+				echo "$name << # response $(printf %${#ids[-1]}d $id) ${res[$id]%%;*} {${res[$id]#*;}}"
 			done
 			log "accept query results from $name"
 
