@@ -3,7 +3,7 @@ log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "broker version 2022-05-19 (protocol 0)"
+	log "broker version 2022-05-20 (protocol 0)"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
@@ -26,15 +26,9 @@ broker=${broker:-broker}
 queue_size=${queue_size:-65536}
 for var in "$@"; do declare "$var"; done
 
-log "verify chat system protocol..."
-echo "protocol 0"
-
-log "register $broker on the chat system..."
-echo "name $broker"
-
 declare -A own # [id]=requester
 declare -A cmd # [id]=command
-declare -A res # [id]=code;output
+declare -A res # [id]=code:output
 declare -A assign # [id]=worker
 declare -A state # [worker]=idle|hold|busy
 declare -A news # [type-who]=subscribe
@@ -48,8 +42,10 @@ regex_worker_state="^(\S+) >> state (idle|busy)$"
 regex_terminate="^(\S+) >> terminate (\S+)$"
 regex_others="^(\S+) >> (query|operate|set|unset|use|subscribe|unsubscribe) (.+)$"
 regex_chat_system="^(#|%) (.+)$"
+regex_ignore_silently="^(\S+ >> confirm restart)$"
 
-log "start monitoring input..."
+log "verify chat system protocol 0..."
+echo "protocol 0"
 
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
@@ -78,7 +74,7 @@ while IFS= read -r message; do
 			unset assign[$id]
 			echo "$worker << accept response $id"
 			if [[ -v cmd[$id] ]]; then
-				res[$id]=$code;$output
+				res[$id]=$code:$output
 				echo "${own[$id]} << response $id $code {$output}"
 				log "accept response $id $code {$output} from $worker and forward it to ${own[$id]}"
 			else
@@ -97,12 +93,16 @@ while IFS= read -r message; do
 		worker=${BASH_REMATCH[1]}
 		status=${BASH_REMATCH[2]}
 		echo "$worker << confirm state $status"
+		log "confirm $worker state $status"
 		if [ "${state[$worker]}" != "$status" ]; then
 			state[$worker]=$status
-			log "confirm $worker state $status"
-			for subscriber in ${notify[$status]}; do
-				echo "$subscriber << notify $worker state $status"
-			done
+			if (( ${#notify[$status]} )); then
+				for subscriber in ${notify[$status]}; do
+					echo "$subscriber << notify $worker state $status"
+				done
+				subscribers=${notify[$status]}
+				log "state has been changed, notify ${subscribers// /, }"
+			fi
 		fi
 
 	elif [[ $message =~ $regex_confirm ]]; then
@@ -156,13 +156,15 @@ while IFS= read -r message; do
 			if [[ $message =~ $regex_rename ]]; then
 				old_name=${BASH_REMATCH[1]}
 				new_name=${BASH_REMATCH[2]}
-				log "$old_name renamed as $new_name"
-				unlink_name=$old_name
+				if [[ " ${own[@]} ${!state[@]} " == *" $name "* ]]; then
+					log "$old_name renamed as $new_name"
+					unlink_name=$old_name
+				fi
 			fi
 			if [[ $message =~ $regex_login_or_logout ]]; then
 				type=${BASH_REMATCH[1]}
 				name=${BASH_REMATCH[2]}
-				if [ "$type" == "logout" ]; then
+				if [ "$type" == "logout" ] && [[ " ${own[@]} ${!state[@]} " == *" $name "* ]]; then
 					log "$name logged out"
 					unlink_name=$name
 				fi
@@ -208,12 +210,21 @@ while IFS= read -r message; do
 
 		elif [ "$type" == "%" ]; then
 			if [[ "$message" == "protocol"* ]]; then
-				log "chat system verified protocol 0"
+				log "chat system protocol verified successfully"
+				log "register $broker on the chat system..."
+				echo "name $broker"
 			elif [[ "$message" == "failed protocol"* ]]; then
 				log "unsupported protocol; exit"
 				exit 1
 			elif [[ "$message" == "name"* ]]; then
 				log "registered as $broker successfully"
+				if [ "$workers" ]; then
+					for worker in ${workers//:/ }; do
+						echo "$worker << query state"
+					done
+					log "query states from ${workers//:/, }..."
+					unset workers
+				fi
 			elif [[ "$message" == "failed name"* ]]; then
 				log "another $broker is already running? exit"
 				exit 2
@@ -288,7 +299,7 @@ while IFS= read -r message; do
 			ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
 			echo "$name << results = (${ids[@]})"
 			for id in ${ids[@]}; do
-				echo "$name << # response $(printf %${#ids[-1]}d $id) ${res[$id]%%;*} {${res[$id]#*;}}"
+				echo "$name << # response $(printf %${#ids[-1]}d $id) ${res[$id]%%:*} {${res[$id]#*:}}"
 			done
 			log "accept query results from $name"
 
@@ -353,42 +364,45 @@ while IFS= read -r message; do
 
 		elif [[ "$command $options" =~ $regex_operate_power ]]; then
 			type=${BASH_REMATCH[1]}
-			targets=()
-			for match in "${BASH_REMATCH[2]:-$broker}"; do
+			matches=( $(<<<${BASH_REMATCH[2]:-$broker} grep -Eo '\S+' | while IFS= read -r match; do
 				for client in ${!state[@]} $broker; do
-					if [[ $client == $match ]]; then
-						targets+=($client)
-					fi
+					[[ $client == $match ]] && echo $client
 				done
-			done
+			done) )
+			declare -A targets
+			for match in ${matches[@]}; do targets[$match]=$type; done
 
-			for target in ${targets[@]}; do
+			for target in ${!targets[@]}; do
 				if [[ -v state[$target] ]]; then
 					echo "$name << confirm $type $target"
 					log "accept operate $type on $target from $name"
 					echo "$target << operate $type"
 				fi
 			done
-			if [[ " ${targets[@]} " == *" $broker "* ]]; then
+			if [[ -v targets[$broker] ]]; then
 				echo "$name << confirm $type $broker"
 				log "accept operate $type on $broker from $name"
 				if [ "$type" == "shutdown" ]; then
 					exit 0
 				elif [ "$type" == "restart" ]; then
+					unset workers
 					for worker in ${!state[@]}; do
-						echo "$worker << accept protocol 0"
+						if ! [[ -v targets[$worker] ]]; then
+							workers+=${workers:+:}$worker
+						fi
 					done
 					log "$broker is restarting..."
 					>&2 echo
-					broker=$broker queue_size=$queue_size exec "$0" "$@"
+					exec "$0" "$@" broker=$broker queue_size=$queue_size workers=$workers
 				fi
 			fi
+			unset targets
 
 		else
 			log "ignore $command $options from $name"
 		fi
 
-	else
+	elif ! [[ $message =~ $regex_ignore_silently ]]; then
 		log "ignore message: $message"
 	fi
 
@@ -399,9 +413,12 @@ while IFS= read -r message; do
 			state[$worker]="hold"
 			assign[$id]=$worker
 			queue=(${queue[@]:1})
-			log "assign request $id to $worker"
+
 			if [[ -v news[assign-${own[$id]}] ]]; then
 				echo "${own[$id]} << notify assign request $id to $worker"
+				log "assign request $id to $worker, notify ${own[$id]}"
+			else
+				log "assign request $id to $worker"
 			fi
 		fi
 	done
