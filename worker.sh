@@ -48,6 +48,7 @@ observe_state() {
 	fi
 }
 
+declare -A own # [id]=requester
 declare -A cmd # [id]=command
 declare -A pid # [id]=PID
 declare state=init # idle|busy
@@ -69,6 +70,7 @@ while IFS= read -r message; do
 		command=${BASH_REMATCH[3]}
 		if [ "$requester" == "$broker" ]; then
 			if (( ${#cmd[@]} < ${num_jobs:-1} )); then
+				own[$id]=$requester
 				cmd[$id]=$command
 				echo "$broker << accept request $id"
 				log "accept request $id {$command} from $broker"
@@ -89,7 +91,7 @@ while IFS= read -r message; do
 		confirm=${BASH_REMATCH[2]}
 		id=${BASH_REMATCH[3]}
 		if [ "$who" == "$broker" ]; then
-			unset cmd[$id] pid[$id]
+			unset own[$id] cmd[$id] pid[$id]
 			log "$broker ${confirm}ed response $id"
 			observe_state notify
 		else
@@ -132,7 +134,7 @@ while IFS= read -r message; do
 					log "request $id {${cmd[$id]}} with pid ${pid[$id]} may not be terminated"
 				fi
 				echo "$broker << accept terminate $id"
-				unset cmd[$id] pid[$id]
+				unset own[$id] cmd[$id] pid[$id]
 				observe_state notify
 			else
 				echo "$who << reject terminate $id"
@@ -187,6 +189,7 @@ while IFS= read -r message; do
 
 		regex_set="^set ([^= ]+)([= ].+)?$"
 		regex_unset="^unset ([^= ]+)$"
+		regex_query_jobs="^query (request|job)s?(.*)$"
 
 		if [[ "$command $options" =~ $regex_set ]]; then
 			var=${BASH_REMATCH[1]}
@@ -225,6 +228,14 @@ while IFS= read -r message; do
 			observe_state
 			echo "$name << state $state"
 			log "accept query state from $name"
+
+		elif [[ "$command $options" =~ $regex_query_jobs ]] ; then
+			ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+			echo "$name << jobs = (${ids[@]})"
+			for id in ${ids[@]}; do
+				echo "$name << # request $(printf %${#ids[-1]}d $id) ${own[$id]} {${cmd[$id]}}"
+			done
+			log "accept query jobs from $name"
 
 		elif [ "$command $options" == "operate shutdown" ]; then
 			echo "$name << confirm shutdown"
