@@ -3,7 +3,7 @@ log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "worker version 2022-05-20 (protocol 0)"
+	log "worker version 2022-05-21 (protocol 0)"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
@@ -29,15 +29,14 @@ for var in "$@"; do declare "$var"; done
 
 execute() {
 	id=$1
-	command=${cmd[$id]}
-	log "execute request $id {$command}"
-	output=$(eval "$command" 2>&1)
+	log "execute request $id {${cmd[$id]}}"
+	output=$(eval "${cmd[$id]}" 2>&1)
 	code=$?
 	# drop ASCII terminal color codes then escape '\' '\n' '\t' with '\'
 	output="$(<<< $output sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
 	          sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]')"
-	log "complete response $id $code {$output}; forward to $broker"
-	echo "$broker << response $id $code {$output}"
+	log "complete response $id $code {$output}; forward it to ${own[$id]}"
+	echo "${own[$id]} << response $id $code {$output}"
 }
 
 observe_state() {
@@ -53,7 +52,7 @@ declare -A cmd # [id]=command
 declare -A pid # [id]=PID
 declare state=init # idle|busy
 
-regex_request="^(\S+) >> request (\S+) \{(.+)\}$"
+regex_request="^(\S+) >> request (\S+) (\{(.+)\}|(.+))$"
 regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
 regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (\S+)$"
 regex_terminate="^(\S+) >> terminate (\S+)$"
@@ -67,35 +66,30 @@ while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
 		requester=${BASH_REMATCH[1]}
 		id=${BASH_REMATCH[2]}
-		command=${BASH_REMATCH[3]}
-		if [ "$requester" == "$broker" ]; then
-			if (( ${#cmd[@]} < ${num_jobs:-1} )); then
-				own[$id]=$requester
-				cmd[$id]=$command
-				echo "$broker << accept request $id"
-				log "accept request $id {$command} from $broker"
-				execute $id &
-				pid[$id]=$!
-			else
-				echo "$broker << reject request $id"
-				log "reject request $id {$command} from $broker since too many running requests"
-			fi
-			observe_state notify
+		command=${BASH_REMATCH[4]:-${BASH_REMATCH[5]}}
+		if [ "$state" == "idle" ]; then
+			own[$id]=$requester
+			cmd[$id]=$command
+			echo "$requester << accept request $id"
+			log "accept request $id {$command} from $requester"
+			execute $id &
+			pid[$id]=$!
 		else
 			echo "$requester << reject request $id"
-			log "reject request $id {$command} from $requester since it is unauthorized"
+			log "reject request $id {$command} from $requester due to busy state"
 		fi
+		observe_state notify
 
 	elif [[ $message =~ $regex_confirm_response ]]; then
 		who=${BASH_REMATCH[1]}
 		confirm=${BASH_REMATCH[2]}
 		id=${BASH_REMATCH[3]}
-		if [ "$who" == "$broker" ]; then
+		if [[ -v cmd[$id] ]]; then
 			unset own[$id] cmd[$id] pid[$id]
-			log "$broker ${confirm}ed response $id"
+			log "confirm that $who ${confirm}ed response $id"
 			observe_state notify
 		else
-			log "$who ${confirm}ed response $id; ignore since it is unauthorized"
+			log "ignore that $who ${confirm}ed response $id since no such response"
 		fi
 
 	elif [[ $message =~ $regex_confirm_others ]]; then
@@ -119,30 +113,29 @@ while IFS= read -r message; do
 			fi
 
 		else
-			log "ignore confirmation $confirm $what $option from $who"
+			log "ignore that $who $confirm $what $option from $who"
 		fi
 
 	elif [[ $message =~ $regex_terminate ]]; then
 		who=${BASH_REMATCH[1]}
 		id=${BASH_REMATCH[2]}
 
-		if [ "$who" == "$broker" ]; then
-			if [[ -v pid[$id] ]]; then
+		if [[ -v pid[$id] ]]; then
+			if [ "${own[$id]}" == "$who" ]; then
+				echo "$who << accept terminate $id"
+				log "accept terminate $id from $who"
 				if kill ${pid[$id]}; then
-					log "request $id {${cmd[$id]}} with pid ${pid[$id]} has been terminated"
-				else
-					log "request $id {${cmd[$id]}} with pid ${pid[$id]} may not be terminated"
+					log "request $id {${cmd[$id]}} with pid ${pid[$id]} has been terminated successfully"
 				fi
-				echo "$broker << accept terminate $id"
 				unset own[$id] cmd[$id] pid[$id]
 				observe_state notify
 			else
 				echo "$who << reject terminate $id"
-				log "ignore terminate $id from $who since nonexistent request"
+				log "reject terminate $id from $who since it is owned by ${own[$id]}"
 			fi
 		else
 			echo "$who << reject terminate $id"
-			log "ignore terminate $id from $who since it is unauthorized"
+			log "reject terminate $id from $who since no such request"
 		fi
 
 	elif [[ $message =~ $regex_chat_system ]]; then
