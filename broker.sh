@@ -35,7 +35,7 @@ declare -A news # [type-who]=subscribe
 declare -A notify # [type]=subscriber...
 declare -a queue # id...
 
-regex_request="^(\S+) >> request (\{(.+)\}( with ([^{}]*))?|(.+))$"
+regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
 regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
 regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
 regex_worker_state="^(\S+) >> state (idle|busy)$"
@@ -50,18 +50,23 @@ echo "protocol 0"
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
 		requester=${BASH_REMATCH[1]}
-		command=${BASH_REMATCH[3]:-${BASH_REMATCH[6]}}
-		options=${BASH_REMATCH[5]}
+		id=${BASH_REMATCH[4]:-$((++id_counter))}
+		command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
+		options=${BASH_REMATCH[7]}
 		if (( ${#queue[@]} < ${queue_size:-65536} )); then
-			id=$((++id_counter))
-			own[$id]=$requester
-			cmd[$id]=$command
-			queue+=($id)
-			echo "$requester << accept request $id {$command}"
-			log "accept request $id {$command} from $requester and enqueue $id, queue = (${queue[@]})"
+			if ! [[ -v own[$id] ]]; then
+				own[$id]=$requester
+				cmd[$id]=$command
+				queue+=($id)
+				echo "$requester << accept request $id {$command}"
+				log "accept request $id {$command} from $requester and enqueue $id, queue = (${queue[@]})"
+			else
+				echo "$requester << reject request $id {$command}"
+				log "reject request $id {$command} from $requester since id $id has been occupied"
+			fi
 		else
 			echo "$requester << reject request {$command}"
-			log "reject request $id {$command} from $requester due to full queue, queue = (${queue[@]})"
+			log "reject request {$command} from $requester due to full queue, queue = (${queue[@]})"
 		fi
 
 	elif [[ $message =~ $regex_response ]]; then
