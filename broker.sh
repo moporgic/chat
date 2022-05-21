@@ -3,7 +3,7 @@ log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "broker version 2022-05-20 (protocol 0)"
+	log "broker version 2022-05-21 (protocol 0)"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
@@ -61,7 +61,7 @@ while IFS= read -r message; do
 			log "accept request $id {$command} from $requester and enqueue $id, queue = (${queue[@]})"
 		else
 			echo "$requester << reject request {$command}"
-			log "reject request $id {$command} from $requester since too many queued requests, queue = (${queue[@]})"
+			log "reject request $id {$command} from $requester due to full queue, queue = (${queue[@]})"
 		fi
 
 	elif [[ $message =~ $regex_response ]]; then
@@ -78,7 +78,7 @@ while IFS= read -r message; do
 				echo "${own[$id]} << response $id $code {$output}"
 				log "accept response $id $code {$output} from $worker and forward it to ${own[$id]}"
 			else
-				log "accept response $id $code {$output} from $worker (no such request)"
+				log "accept response $id $code {$output} from $worker but no such request"
 			fi
 		else
 			echo "$worker << reject response $id"
@@ -93,7 +93,7 @@ while IFS= read -r message; do
 		worker=${BASH_REMATCH[1]}
 		status=${BASH_REMATCH[2]}
 		echo "$worker << confirm state $status"
-		log "confirm $worker state $status"
+		log "confirm that $worker state $status"
 		if [ "${state[$worker]}" != "$status" ]; then
 			state[$worker]=$status
 			if (( ${#notify[$status]} )); then
@@ -128,20 +128,20 @@ while IFS= read -r message; do
 				elif [ "$type" == "terminate" ]; then
 					unset cmd[$id] own[$id] assign[$id] res[$id]
 				fi
-				log "$name ${confirm}ed $type $id; confirm"
+				log "confirm that $name ${confirm}ed $type $id"
 
 			elif [ "$confirm" == "reject" ]; then
 				if [ "$type" == "request" ]; then
 					unset assign[$id]
 				fi
 				queue=($id ${queue[@]})
-				log "$name ${confirm}ed $type $id; confirm and re-enqueue $id, queue = (${queue[@]})"
+				log "confirm that $name ${confirm}ed $type $id and re-enqueue $id, queue = (${queue[@]})"
 			fi
 
 		elif [ "$who" ]; then
-			log "$name ${confirm}ed $type $id; ignore since it is owned by $who"
+			log "ignore that $name ${confirm}ed $type $id since it is owned by $who"
 		else
-			log "$name ${confirm}ed $type $id; ignore since no such $type"
+			log "ignore that $name ${confirm}ed $type $id since no such $type"
 		fi
 
 	elif [[ $message =~ $regex_chat_system ]]; then
@@ -149,34 +149,20 @@ while IFS= read -r message; do
 		message=${BASH_REMATCH[2]}
 
 		if [ "$type" == "#" ]; then
-			regex_rename="^name: (\S+) becomes (\S+)$"
-			regex_login_or_logout="^(login|logout): (\S+)$"
+			names=(${own[@]} ${!state[@]})
+			names=${names[@]}
+			regex_logout="^logout: (${names// /|})$"
+			regex_rename="^name: (${names// /|}) becomes (\S+)$"
 
-			unset unlink_name
-			if [[ $message =~ $regex_rename ]]; then
-				old_name=${BASH_REMATCH[1]}
-				new_name=${BASH_REMATCH[2]}
-				if [[ " ${own[@]} ${!state[@]} " == *" $name "* ]]; then
-					log "$old_name renamed as $new_name"
-					unlink_name=$old_name
-				fi
-			fi
-			if [[ $message =~ $regex_login_or_logout ]]; then
-				type=${BASH_REMATCH[1]}
-				name=${BASH_REMATCH[2]}
-				if [ "$type" == "logout" ] && [[ " ${own[@]} ${!state[@]} " == *" $name "* ]]; then
-					log "$name logged out"
-					unlink_name=$name
-				fi
-			fi
-			if [ "$unlink_name" ]; then
-				name=$unlink_name
+			if [[ $message =~ $regex_logout ]]; then
+				name=${BASH_REMATCH[1]}
+				log "$name logged out"
 				if [[ -v state[$name] ]]; then
 					for id in ${!assign[@]}; do
 						if [ "${assign[$id]}" == "$name" ]; then
 							unset assign[$id]
 							queue=($id ${queue[@]})
-							log "revoke assigned request $id; re-enqueue $id, queue = (${queue[@]})"
+							log "revoke assigned request $id and re-enqueue $id, queue = (${queue[@]})"
 						fi
 					done
 					unset state[$name]
@@ -204,6 +190,31 @@ while IFS= read -r message; do
 						notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
 						unset news[$item-$name]
 						log "unsubscribe $item for $name"
+					fi
+				done
+			elif [[ $message =~ $regex_rename ]]; then
+				old_name=${BASH_REMATCH[1]}
+				new_name=${BASH_REMATCH[2]}
+				log "$old_name renamed as $new_name"
+				if [[ -v state[$old_name] ]]; then
+					for id in ${!assign[@]}; do
+						if [ "${assign[$id]}" == "$old_name" ]; then
+							assign[$id]=$new_name
+						fi
+					done
+					state[$new_name]=${state[$old_name]}
+					unset state[$old_name]
+				fi
+				for id in ${!own[@]}; do
+					if [ "${own[$id]}" == "$old_name" ]; then
+						own[$id]=$new_name
+					fi
+				done
+				for item in ${!notify[@]}; do
+					if [[ " ${notify[$item]} " == *" $old_name "* ]]; then
+						notify[$item]=$(printf "%s\n" ${notify[$item]} $new_name | sed "/^${old_name}$/d")
+						news[$item-$new_name]=${news[$item-$old_name]}
+						unset news[$item-$old_name]
 					fi
 				done
 			fi
