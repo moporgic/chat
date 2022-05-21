@@ -35,7 +35,7 @@ execute() {
 	# drop ASCII terminal color codes then escape '\' '\n' '\t' with '\'
 	output="$(<<< $output sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
 	          sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]')"
-	log "complete response $id $code {$output}; forward it to ${own[$id]}"
+	log "complete response $id $code {$output} and forward it to ${own[$id]}"
 	echo "${own[$id]} << response $id $code {$output}"
 }
 
@@ -52,7 +52,7 @@ declare -A cmd # [id]=command
 declare -A pid # [id]=PID
 declare state=init # idle|busy
 
-regex_request="^(\S+) >> request (\S+) (\{(.+)\}|(.+))$"
+regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
 regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
 regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (\S+)$"
 regex_terminate="^(\S+) >> terminate (\S+)$"
@@ -65,15 +65,21 @@ echo "protocol 0"
 while IFS= read -r message; do
 	if [[ $message =~ $regex_request ]]; then
 		requester=${BASH_REMATCH[1]}
-		id=${BASH_REMATCH[2]}
-		command=${BASH_REMATCH[4]:-${BASH_REMATCH[5]}}
+		id=${BASH_REMATCH[4]:-$((++id_counter))}
+		command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
+		options=${BASH_REMATCH[7]}
 		if [ "$state" == "idle" ]; then
-			own[$id]=$requester
-			cmd[$id]=$command
-			echo "$requester << accept request $id"
-			log "accept request $id {$command} from $requester"
-			execute $id &
-			pid[$id]=$!
+			if ! [[ -v own[$id] ]]; then
+				own[$id]=$requester
+				cmd[$id]=$command
+				echo "$requester << accept request $id"
+				log "accept request $id {$command} from $requester"
+				execute $id &
+				pid[$id]=$!
+			else
+				echo "$requester << reject request $id"
+				log "reject request $id {$command} from $requester since id $id has been occupied"
+			fi
 		else
 			echo "$requester << reject request $id"
 			log "reject request $id {$command} from $requester due to busy state"
@@ -84,10 +90,14 @@ while IFS= read -r message; do
 		who=${BASH_REMATCH[1]}
 		confirm=${BASH_REMATCH[2]}
 		id=${BASH_REMATCH[3]}
-		if [[ -v cmd[$id] ]]; then
-			unset own[$id] cmd[$id] pid[$id]
-			log "confirm that $who ${confirm}ed response $id"
-			observe_state notify
+		if [[ -v own[$id] ]]; then
+			if [ "${own[$id]}" == "$who" ]; then
+				unset own[$id] cmd[$id] pid[$id]
+				log "confirm that $who ${confirm}ed response $id"
+				observe_state notify
+			else
+				log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
+			fi
 		else
 			log "ignore that $who ${confirm}ed response $id since no such response"
 		fi
