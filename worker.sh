@@ -3,7 +3,7 @@ log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "worker version 2022-05-21 (protocol 0)"
+	log "worker version 2022-05-22 (protocol 0)"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
@@ -24,8 +24,14 @@ fi
 
 broker=${broker:-broker}
 worker=${worker:-worker-1}
-num_jobs=${num_jobs:-1}
+max_num_jobs=${max_num_jobs:-1}
+state_file=${state_file}
 for var in "$@"; do declare "$var"; done
+
+declare -A own # [id]=requester
+declare -A cmd # [id]=command
+declare -A pid # [id]=PID
+declare state=init # idle|busy
 
 execute() {
 	id=$1
@@ -40,17 +46,28 @@ execute() {
 }
 
 observe_state() {
-	(( ${#cmd[@]} < ${num_jobs:-1} )) && state=idle || state=busy
-	if [ "$1" == "notify" ]; then
-		echo "$broker << state $state"
-		log "state $state; notify $broker"
+	current_state=$state
+	if (( ${#cmd[@]} >= ${max_num_jobs:-1} )); then
+		state=busy
+	elif [ "$state_file" ] && [ "$(grep -Eo '(idle|busy)' $state_file 2>/dev/null | tail -n1)" == "busy" ]; then
+		state=busy
+	else
+		state=idle
 	fi
+	[ "$state" != "$current_state" ]
+	return $?
 }
 
-declare -A own # [id]=requester
-declare -A cmd # [id]=command
-declare -A pid # [id]=PID
-declare state=init # idle|busy
+notify_state() {
+	echo "${1:-$broker} << state $state"
+	log "state $state; notify ${1:-$broker}"
+}
+
+input() {
+	unset ${1:-message}
+	IFS= read -r -t ${input_timeout:-1} ${1:-message}
+	return $(( $? < 128 ? $? : 0 ))
+}
 
 regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
 regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
@@ -62,12 +79,13 @@ regex_chat_system="^(#|%) (.+)$"
 log "verify chat system protocol 0..."
 echo "protocol 0"
 
-while IFS= read -r message; do
+while input message; do
 	if [[ $message =~ $regex_request ]]; then
 		requester=${BASH_REMATCH[1]}
 		id=${BASH_REMATCH[4]:-$((++id_counter))}
 		command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
 		options=${BASH_REMATCH[7]}
+		observe_state
 		if [ "$state" == "idle" ]; then
 			if ! [[ -v own[$id] ]]; then
 				own[$id]=$requester
@@ -84,7 +102,7 @@ while IFS= read -r message; do
 			echo "$requester << reject request $id"
 			log "reject request $id {$command} from $requester due to busy state"
 		fi
-		observe_state notify
+		observe_state && notify_state
 
 	elif [[ $message =~ $regex_confirm_response ]]; then
 		who=${BASH_REMATCH[1]}
@@ -94,7 +112,7 @@ while IFS= read -r message; do
 			if [ "${own[$id]}" == "$who" ]; then
 				unset own[$id] cmd[$id] pid[$id]
 				log "confirm that $who ${confirm}ed response $id"
-				observe_state notify
+				observe_state && notify_state
 			else
 				log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
 			fi
@@ -115,7 +133,7 @@ while IFS= read -r message; do
 		elif [ "$who $what" == "$broker protocol" ]; then
 			if [ "$confirm" == "accept" ]; then
 				log "handshake with $broker successfully"
-				observe_state notify
+				observe_state; notify_state
 
 			elif [ "$confirm" == "reject" ]; then
 				log "handshake failed, unsupported protocol; exit"
@@ -138,7 +156,7 @@ while IFS= read -r message; do
 					log "request $id {${cmd[$id]}} with pid ${pid[$id]} has been terminated successfully"
 				fi
 				unset own[$id] cmd[$id] pid[$id]
-				observe_state notify
+				observe_state && notify_state
 			else
 				echo "$who << reject terminate $id"
 				log "reject terminate $id from $who since it is owned by ${own[$id]}"
@@ -207,8 +225,8 @@ while IFS= read -r message; do
 				elif [ "$var" == "worker" ]; then
 					log "worker name has been changed, register $worker on the chat system..."
 					echo "name ${worker:=worker-1}"
-				elif [ "$var" == "num_jobs" ]; then
-					observe_state notify
+				elif [ "$var" == "max_num_jobs" ] || [ "$var" == "state_file" ]; then
+					observe_state && notify_state
 				elif [ "$var" == "state" ]; then
 					log "state $state; notify $broker"
 					echo "$broker << state $state"
@@ -228,9 +246,8 @@ while IFS= read -r message; do
 			fi
 
 		elif [ "$command $options" == "query state" ]; then
-			observe_state
-			echo "$name << state $state"
 			log "accept query state from $name"
+			notify_state $name
 
 		elif [[ "$command $options" =~ $regex_query_jobs ]] ; then
 			ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
@@ -250,10 +267,15 @@ while IFS= read -r message; do
 			log "accept operate restart from $name"
 			log "$worker is restarting..."
 			>&2 echo
-			exec "$0" "$@" broker=$broker worker=$worker num_jobs=$num_jobs
+			exec "$0" "$@" broker=$broker worker=$worker max_num_jobs=$max_num_jobs state_file=$state_file
 
 		else
 			log "ignore $command $options from $name"
+		fi
+
+	elif ! [ "$message" ]; then
+		if [ "$state" != "init" ]; then
+			observe_state && notify_state
 		fi
 
 	else
