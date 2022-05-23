@@ -3,6 +3,7 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
 max_queue_size=${max_queue_size:-65536}
+timeout=${timeout:-0}
 
 stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
 logfile=${logfile:-$(mktemp --suffix .log $(basename -s .sh "$0")-$stamp.XXXX)}
@@ -33,6 +34,7 @@ declare -A own # [id]=requester
 declare -A cmd # [id]=command
 declare -A res # [id]=code:output
 declare -A assign # [id]=worker
+declare -A tmout # [id]=timeout
 declare -A state # [worker]=idle|hold|busy
 declare -A news # [type-who]=subscribe
 declare -A notify # [type]=subscriber...
@@ -66,9 +68,15 @@ while input message; do
 			if ! [[ -v own[$id] ]]; then
 				own[$id]=$requester
 				cmd[$id]=$command
+				unset with
+				[[ $options =~ timeout=([0-9]+) ]] && tmz=${BASH_REMATCH[1]} || tmz=$timeout
+				if (( $tmz )); then
+					tmout[$id]=$(($(date +%s)+$tmz))
+					with+=${with:+ }timeout=$tmz
+				fi
 				queue+=($id)
 				echo "$requester << accept request $id {$command}"
-				log "accept request $id {$command} from $requester and enqueue $id, queue = (${queue[@]})"
+				log "accept request $id {$command} ${with:+with ${with// /,} }from $requester and enqueue $id, queue = (${queue[@]})"
 			else
 				echo "$requester << reject request $id {$command}"
 				log "reject request $id {$command} from $requester since id $id has been occupied"
@@ -85,7 +93,7 @@ while input message; do
 		output=${BASH_REMATCH[4]}
 
 		if [ "${assign[$id]}" == "$worker" ]; then
-			unset assign[$id]
+			unset assign[$id] tmout[$id]
 			echo "$worker << accept response $id"
 			if [[ -v cmd[$id] ]]; then
 				res[$id]=$code:$output
@@ -138,9 +146,9 @@ while input message; do
 
 			if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
 				if [ "$type" == "response" ]; then
-					unset cmd[$id] own[$id] res[$id]
+					unset cmd[$id] own[$id] res[$id] tmout[$id]
 				elif [ "$type" == "terminate" ]; then
-					unset cmd[$id] own[$id] assign[$id] res[$id]
+					unset cmd[$id] own[$id] assign[$id] res[$id] tmout[$id]
 				fi
 				log "confirm that $name ${confirm}ed $type $id"
 
@@ -183,7 +191,7 @@ while input message; do
 				fi
 				for id in ${!own[@]}; do
 					if [ "${own[$id]}" == "$name" ]; then
-						unset cmd[$id] own[$id]
+						unset cmd[$id] own[$id] tmout[$id]
 						if [[ -v res[$id] ]]; then
 							unset res[$id]
 							log "discard request $id and response $id"
@@ -271,7 +279,7 @@ while input message; do
 		elif [[ -v cmd[$id] ]]; then
 			queue=" ${queue[@]} "
 			queue=(${queue/ $id / })
-			unset cmd[$id] own[$id]
+			unset cmd[$id] own[$id] tmout[$id]
 			echo "$name << accept terminate $id"
 			log "accept terminate $id from $name and remove it from queue"
 		else
@@ -418,7 +426,7 @@ while input message; do
 					done
 					log "$broker is restarting..."
 					echo >&2
-					exec "$0" "$@" broker=$broker max_queue_size=$max_queue_size workers=$workers stamp=$stamp logfile=$logfile
+					exec "$0" "$@" broker=$broker max_queue_size=$max_queue_size timeout=$timeout workers=$workers stamp=$stamp logfile=$logfile
 				fi
 			fi
 			unset targets
@@ -428,7 +436,21 @@ while input message; do
 		fi
 
 	elif ! [ "$message" ]; then
-		:
+		current=$(date +%s)
+		for id in ${!tmout[@]}; do
+			if (( $current > ${tmout[$id]} )); then
+				log "request $id failed due to timeout (due $(date '+%Y-%m-%d %H:%M:%S' -d @${tmout[$id]})), notify ${own[$id]}"
+				if [[ -v assign[$id] ]]; then
+					echo "${assign[$id]} << terminate $id"
+					log "terminate assigned request $id on ${assign[$id]}"
+				elif [[ -v own[$id] ]]; then
+					queue=" ${queue[@]} "
+					queue=(${queue/ $id / })
+				fi
+				echo "${own[$id]} << response $id timeout {}"
+				unset cmd[$id] own[$id] res[$id] tmout[$id]
+			fi
+		done
 
 	elif ! [[ $message =~ $regex_ignore_silently ]]; then
 		log "ignore message: $message"
