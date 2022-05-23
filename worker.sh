@@ -1,19 +1,28 @@
 #!/bin/bash
-log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
+for var in "$@"; do declare "$var" 2>/dev/null; done
+
+broker=${broker:-broker}
+worker=${worker:-worker-1}
+max_num_jobs=${max_num_jobs:-1}
+state_file=${state_file}
+
+stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
+logfile=${logfile:-$(mktemp --suffix .log $(basename -s .sh "$0")-$stamp.XXXX)}
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "worker version 2022-05-22 (protocol 0)"
+	log "worker version 2022-05-23 (protocol 0)"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
 		shift
 		log "connect to chat system at $addr:$port..."
-		fifo=$(mktemp -u --suffix .fifo $(basename -s .sh "$0").XXXXXXXX)
+		fifo=$(mktemp -u --suffix .fifo .$(basename -s .sh "$0").XXXX)
 		mkfifo $fifo
 		trap "rm -f $fifo;" EXIT
-		nc $addr $port < $fifo | "$0" _NC "$@" > $fifo && exit 0
+		nc $addr $port < $fifo | "$0" _NC "$@" stamp=$stamp logfile=$logfile > $fifo && exit 0
 		log "unable to connect $addr:$port"
 		exit 8
 	fi
@@ -21,12 +30,6 @@ elif [ "$1" == _NC ]; then
 	log "connected to chat system successfully"
 	shift
 fi
-
-broker=${broker:-broker}
-worker=${worker:-worker-1}
-max_num_jobs=${max_num_jobs:-1}
-state_file=${state_file}
-for var in "$@"; do declare "$var"; done
 
 declare -A own # [id]=requester
 declare -A cmd # [id]=command
@@ -197,7 +200,7 @@ while input message; do
 				occupied=$worker
 				worker=${worker%-*}-$((${worker##*-}+1))
 				echo "name $worker"
-				log "name $occupied is occupied, try register $worker on the chat system..."
+				log "name $occupied has been occupied, try register $worker on the chat system..."
 			elif [[ "$info" == "failed chat"* ]]; then
 				log "$broker disconnected? wait until $broker come back..."
 			fi
@@ -266,8 +269,8 @@ while input message; do
 			echo "$name << confirm restart"
 			log "accept operate restart from $name"
 			log "$worker is restarting..."
-			>&2 echo
-			exec "$0" "$@" broker=$broker worker=$worker max_num_jobs=$max_num_jobs state_file=$state_file
+			echo >&2
+			exec "$0" "$@" broker=$broker worker=$worker max_num_jobs=$max_num_jobs state_file=$state_file stamp=$stamp logfile=$logfile
 
 		else
 			log "ignore $command $options from $name"

@@ -1,19 +1,26 @@
 #!/bin/bash
-log() { >&2 echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@"; }
+for var in "$@"; do declare "$var" 2>/dev/null; done
+
+broker=${broker:-broker}
+max_queue_size=${max_queue_size:-65536}
+
+stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
+logfile=${logfile:-$(mktemp --suffix .log $(basename -s .sh "$0")-$stamp.XXXX)}
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "broker version 2022-05-21 (protocol 0)"
+	log "broker version 2022-05-23 (protocol 0)"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
 		shift
 		log "connect to chat system at $addr:$port..."
-		fifo=$(mktemp -u --suffix .fifo $(basename -s .sh "$0").XXXXXXXX)
+		fifo=$(mktemp -u --suffix .fifo .$(basename -s .sh "$0").XXXX)
 		mkfifo $fifo
 		trap "rm -f $fifo;" EXIT
-		nc $addr $port < $fifo | "$0" _NC "$@" > $fifo && exit 0
+		nc $addr $port < $fifo | "$0" _NC "$@" stamp=$stamp logfile=$logfile > $fifo && exit 0
 		log "unable to connect $addr:$port"
 		exit 8
 	fi
@@ -21,10 +28,6 @@ elif [ "$1" == _NC ]; then
 	log "connected to chat system successfully"
 	shift
 fi
-
-broker=${broker:-broker}
-queue_size=${queue_size:-65536}
-for var in "$@"; do declare "$var"; done
 
 declare -A own # [id]=requester
 declare -A cmd # [id]=command
@@ -34,6 +37,12 @@ declare -A state # [worker]=idle|hold|busy
 declare -A news # [type-who]=subscribe
 declare -A notify # [type]=subscriber...
 declare -a queue # id...
+
+input() {
+	unset ${1:-message}
+	IFS= read -r -t ${input_timeout:-1} ${1:-message}
+	return $(( $? < 128 ? $? : 0 ))
+}
 
 regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
 regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
@@ -47,13 +56,13 @@ regex_ignore_silently="^(\S+ >> confirm restart)$"
 log "verify chat system protocol 0..."
 echo "protocol 0"
 
-while IFS= read -r message; do
+while input message; do
 	if [[ $message =~ $regex_request ]]; then
 		requester=${BASH_REMATCH[1]}
 		id=${BASH_REMATCH[4]:-$((++id_counter))}
 		command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
 		options=${BASH_REMATCH[7]}
-		if (( ${#queue[@]} < ${queue_size:-65536} )); then
+		if (( ${#queue[@]} < ${max_queue_size:-65536} )); then
 			if ! [[ -v own[$id] ]]; then
 				own[$id]=$requester
 				cmd[$id]=$command
@@ -408,8 +417,8 @@ while IFS= read -r message; do
 						fi
 					done
 					log "$broker is restarting..."
-					>&2 echo
-					exec "$0" "$@" broker=$broker queue_size=$queue_size workers=$workers
+					echo >&2
+					exec "$0" "$@" broker=$broker max_queue_size=$max_queue_size workers=$workers stamp=$stamp logfile=$logfile
 				fi
 			fi
 			unset targets
@@ -417,6 +426,9 @@ while IFS= read -r message; do
 		else
 			log "ignore $command $options from $name"
 		fi
+
+	elif ! [ "$message" ]; then
+		:
 
 	elif ! [[ $message =~ $regex_ignore_silently ]]; then
 		log "ignore message: $message"
