@@ -11,27 +11,31 @@ logfile=${logfile:-$(mktemp --suffix .log $(basename -s .sh "$0")-$stamp.XXXX)}
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
-if [ "$1" != _NC ]; then
+if [[ $1 != NC=* ]]; then
 	log "worker version 2022-05-24 (protocol 0)"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
-	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
+	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
-		shift
-		log "connect to chat system at $addr:$port..."
-		coproc NC { nc -q 0 $addr $port; }
-		sleep ${wait_for_connect:-1}
-		if ps -p $NC_PID >/dev/null 2>&1; then
-			"$0" _NC "$@" stamp=$stamp logfile=$logfile <&${NC[0]} >&${NC[1]}
-			exit 0
-		fi
-		log "failed to connect $addr:$port, host down?"
-		exit 8
+		while (( $((conn_count++)) < ${max_conn_count:-65536} )); do
+			log "connect to chat system at $addr:$port..."
+			coproc NC { nc -q 0 $addr $port; }
+			sleep ${wait_for_conn:-1}
+			if ps -p $NC_PID >/dev/null 2>&1; then
+				$0 NC=$1 "${@:2}" stamp=$stamp logfile=$logfile <&${NC[0]} >&${NC[1]}
+				tail -n2 $logfile | grep -q "shutdown" && exit 0
+				code=0; wait_for_conn=1
+			else
+				log "failed to connect $addr:$port, host down?"
+				code=$((code+1)); wait_for_conn=60
+			fi
+		done
+		log "max number of connections is reached"
+		exit $code
 	fi
-elif [ "$1" == _NC ]; then
+elif [[ $1 == NC=* ]]; then
 	trap 'cleanup 2>/dev/null;' EXIT
 	log "connected to chat system successfully"
-	shift
 fi
 
 declare -A own # [id]=requester
@@ -272,7 +276,6 @@ while input message; do
 			echo "$name << confirm restart"
 			log "accept operate restart from $name"
 			log "$worker is restarting..."
-			echo >&2
 			exec "$0" "$@" broker=$broker worker=$worker max_num_jobs=$max_num_jobs state_file=$state_file stamp=$stamp logfile=$logfile
 
 		else
