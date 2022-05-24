@@ -12,14 +12,19 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
 if [[ $1 != NC=* ]]; then
-	log "worker version 2022-05-24 (protocol 0)"
+	log "worker version 2022-05-25 (protocol 0)"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
+		nc=($(command -v ncat nc netcat | xargs -r -L1 basename))
+		if ! (( ${#nc[@]} )); then
+			log "no available netcat commands (ncat, nc, netcat)"
+			exit 16
+		fi
 		while (( $((conn_count++)) < ${max_conn_count:-65536} )); do
 			log "connect to chat system at $addr:$port..."
-			coproc NC { nc -q 0 $addr $port; }
+			coproc NC { $nc $addr $port; }
 			sleep ${wait_for_conn:-1}
 			if ps -p $NC_PID >/dev/null 2>&1; then
 				$0 NC=$1 "${@:2}" stamp=$stamp logfile=$logfile <&${NC[0]} >&${NC[1]}
