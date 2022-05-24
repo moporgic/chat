@@ -238,19 +238,16 @@ while input message; do
 			echo "$name << accept set ${var}${val:+ ${val}}"
 			declare val_old="${!var}" $var="$val"
 			log "accept set ${var}${val:+ as ${val}} from $name"
-			if [ "$val" != "$val_old" ]; then
-				if [ "$var" == "broker" ]; then
-					log "broker has been changed, make handshake (protocol 0) with $broker again..."
-					echo "$broker << use protocol 0"
-				elif [ "$var" == "worker" ]; then
-					log "worker name has been changed, register $worker on the chat system..."
-					echo "name ${worker:=worker-1}"
-				elif [ "$var" == "max_num_jobs" ] || [ "$var" == "state_file" ]; then
-					observe_state && notify_state
-				elif [ "$var" == "state" ]; then
-					log "state $state; notify $broker"
-					echo "$broker << state $state"
-				fi
+			if [ "$var" == "broker" ]; then
+				log "broker has been changed, make handshake (protocol 0) with $broker again..."
+				echo "$broker << use protocol 0"
+			elif [ "$var" == "worker" ]; then
+				log "worker name has been changed, register $worker on the chat system..."
+				echo "name ${worker:=worker-1}"
+			elif [ "$var" == "max_num_jobs" ] || [ "$var" == "state_file" ]; then
+				observe_state && notify_state
+			elif [ "$var" == "state" ]; then
+				notify_state
 			fi
 
 		elif [[ "$command $options" =~ $regex_unset ]]; then
