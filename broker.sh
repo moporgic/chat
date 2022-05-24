@@ -219,7 +219,7 @@ while input message; do
 					unset state[$name]
 				fi
 				for id in ${!own[@]}; do
-					if [ "${own[$id]}" == "$name" ]; then
+					if [ "${own[$id]}" == "$name" ] && ! [ "${keep_unowned_tasks}" ]; then
 						unset cmd[$id] own[$id] tmout[$id] prefer[$id]
 						if [[ -v res[$id] ]]; then
 							unset res[$id]
