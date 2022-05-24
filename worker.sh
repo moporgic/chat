@@ -282,6 +282,17 @@ while input message; do
 			done
 			log "accept query jobs from $name"
 
+		elif [ "$command $options" == "query envinfo" ]; then
+			if [ -e envinfo.sh ]; then
+				envinfo=$(bash envinfo.sh 2>/dev/null)
+				echo "$name << accept query envinfo ($(<<<$envinfo wc -l))"
+				<<< $envinfo xargs -r -L1 echo "$name << #"
+				log "accept query envinfo from $name"
+			else
+				echo "$name << reject query envinfo"
+				log "reject query envinfo from $name; not installed"
+			fi
+
 		elif [ "$command $options" == "operate shutdown" ]; then
 			echo "$name << confirm shutdown"
 			log "accept operate shutdown from $name"
