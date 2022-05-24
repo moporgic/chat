@@ -122,7 +122,7 @@ while input message; do
 			echo "$requester << reject request $id"
 			log "reject request $id {$command} from $requester due to busy state"
 		fi
-		observe_state && notify_state
+		observe_state; notify_state
 
 	elif [[ $message =~ $regex_confirm_response ]]; then
 		who=${BASH_REMATCH[1]}
@@ -132,7 +132,7 @@ while input message; do
 			if [ "${own[$id]}" == "$who" ]; then
 				unset own[$id] cmd[$id] pid[$id]
 				log "confirm that $who ${confirm}ed response $id"
-				observe_state && notify_state
+				observe_state; notify_state
 			else
 				log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
 			fi
@@ -176,7 +176,7 @@ while input message; do
 					log "request $id {${cmd[$id]}} with pid ${pid[$id]} has been terminated successfully"
 				fi
 				unset own[$id] cmd[$id] pid[$id]
-				observe_state && notify_state
+				observe_state; notify_state
 			else
 				echo "$who << reject terminate $id"
 				log "reject terminate $id from $who since it is owned by ${own[$id]}"
@@ -245,7 +245,7 @@ while input message; do
 				log "worker name has been changed, register $worker on the chat system..."
 				echo "name ${worker:=worker-1}"
 			elif [ "$var" == "max_num_jobs" ] || [ "$var" == "state_file" ]; then
-				observe_state && notify_state
+				observe_state; notify_state
 			elif [ "$var" == "state" ]; then
 				notify_state
 			fi
