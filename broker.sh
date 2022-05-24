@@ -11,7 +11,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "broker version 2022-05-23 (protocol 0)"
+	log "broker version 2022-05-24 (protocol 0)"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
@@ -34,6 +34,7 @@ declare -A own # [id]=requester
 declare -A cmd # [id]=command
 declare -A res # [id]=code:output
 declare -A assign # [id]=worker
+declare -A prefer # [id]=worker
 declare -A tmout # [id]=timeout
 declare -A state # [worker]=idle|hold|busy
 declare -A news # [type-who]=subscribe
@@ -68,11 +69,16 @@ while input message; do
 			if ! [[ -v own[$id] ]]; then
 				own[$id]=$requester
 				cmd[$id]=$command
-				unset with
+				unset with tmz pfz
 				[[ $options =~ timeout=([0-9]+) ]] && tmz=${BASH_REMATCH[1]} || tmz=$timeout
+				[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]}
 				if (( $tmz )); then
 					tmout[$id]=$(($(date +%s)+$tmz))
 					with+=${with:+ }timeout=$tmz
+				fi
+				if [[ $pfz ]]; then
+					prefer[$id]=$pfz
+					with+=${with:+ }prefer=$pfz
 				fi
 				queue+=($id)
 				echo "$requester << accept request $id {$command}"
@@ -93,7 +99,7 @@ while input message; do
 		output=${BASH_REMATCH[4]}
 
 		if [ "${assign[$id]}" == "$worker" ]; then
-			unset assign[$id] tmout[$id]
+			unset assign[$id] tmout[$id] prefer[$id]
 			echo "$worker << accept response $id"
 			if [[ -v cmd[$id] ]]; then
 				res[$id]=$code:$output
@@ -146,9 +152,9 @@ while input message; do
 
 			if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
 				if [ "$type" == "response" ]; then
-					unset cmd[$id] own[$id] res[$id] tmout[$id]
+					unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id]
 				elif [ "$type" == "terminate" ]; then
-					unset cmd[$id] own[$id] assign[$id] res[$id] tmout[$id]
+					unset cmd[$id] own[$id] assign[$id] res[$id] tmout[$id] prefer[$id]
 				fi
 				log "confirm that $name ${confirm}ed $type $id"
 
@@ -191,7 +197,7 @@ while input message; do
 				fi
 				for id in ${!own[@]}; do
 					if [ "${own[$id]}" == "$name" ]; then
-						unset cmd[$id] own[$id] tmout[$id]
+						unset cmd[$id] own[$id] tmout[$id] prefer[$id]
 						if [[ -v res[$id] ]]; then
 							unset res[$id]
 							log "discard request $id and response $id"
@@ -279,7 +285,7 @@ while input message; do
 		elif [[ -v cmd[$id] ]]; then
 			queue=" ${queue[@]} "
 			queue=(${queue/ $id / })
-			unset cmd[$id] own[$id] tmout[$id]
+			unset cmd[$id] own[$id] tmout[$id] prefer[$id]
 			echo "$name << accept terminate $id"
 			log "accept terminate $id from $name and remove it from queue"
 		else
@@ -448,7 +454,7 @@ while input message; do
 					queue=(${queue/ $id / })
 				fi
 				echo "${own[$id]} << response $id timeout {}"
-				unset cmd[$id] own[$id] res[$id] tmout[$id]
+				unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id]
 			fi
 		done
 
@@ -456,22 +462,29 @@ while input message; do
 		log "ignore message: $message"
 	fi
 
-	for worker in ${!state[@]}; do
-		if (( ${#queue[@]} )) && [ "${state[$worker]}" == "idle" ]; then
-			id=${queue[0]}
-			echo "$worker << request $id {${cmd[$id]}}"
-			state[$worker]="hold"
-			assign[$id]=$worker
-			queue=(${queue[@]:1})
+	qubuf=()
+	for id in ${queue[@]}; do
+		pref=${prefer[$id]:-"*"}
+		for worker in ${!state[@]}; do
+			if [ "${state[$worker]}" == "idle" ] && [[ $worker == $pref ]]; then
+				echo "$worker << request $id {${cmd[$id]}}"
+				state[$worker]="hold"
+				assign[$id]=$worker
+				queue=(${queue[@]:1})
 
-			if [[ -v news[assign-${own[$id]}] ]]; then
-				echo "${own[$id]} << notify assign request $id to $worker"
-				log "assign request $id to $worker, notify ${own[$id]}"
-			else
-				log "assign request $id to $worker"
+				if [[ -v news[assign-${own[$id]}] ]]; then
+					echo "${own[$id]} << notify assign request $id to $worker"
+					log "assign request $id to $worker, notify ${own[$id]}"
+				else
+					log "assign request $id to $worker"
+				fi
+				unset id
+				break
 			fi
-		fi
+		done
+		qubuf+=($id)
 	done
+	queue=(${qubuf[@]})
 done
 
 log "message input is terminated, chat system is down?"
