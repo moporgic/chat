@@ -73,6 +73,16 @@ notify_state() {
 	log "state $state; notify ${1:-$broker}"
 }
 
+list_args() {
+	declare -A args
+	for var in "$@"; do
+		var=${var%%=*}
+		[[ -v args[$var] ]] || echo $var="${!var}"
+		args[$var]=${!var}
+	done
+	unset args
+}
+
 input() {
 	unset ${1:-message}
 	IFS= read -r -t ${input_timeout:-1} ${1:-message}
@@ -276,7 +286,7 @@ while input message; do
 			echo "$name << confirm restart"
 			log "accept operate restart from $name"
 			log "$worker is restarting..."
-			exec "$0" "$@" broker=$broker worker=$worker max_num_jobs=$max_num_jobs state_file=$state_file stamp=$stamp logfile=$logfile
+			exec $0 $(list_args "$@" broker worker max_num_jobs state_file stamp logfile)
 
 		else
 			log "ignore $command $options from $name"

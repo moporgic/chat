@@ -49,6 +49,16 @@ declare -A news # [type-who]=subscribe
 declare -A notify # [type]=subscriber...
 declare -a queue # id...
 
+list_args() {
+	declare -A args
+	for var in "$@"; do
+		var=${var%%=*}
+		[[ -v args[$var] ]] || echo $var="${!var}"
+		args[$var]=${!var}
+	done
+	unset args
+}
+
 input() {
 	unset ${1:-message}
 	IFS= read -r -t ${input_timeout:-1} ${1:-message}
@@ -439,7 +449,7 @@ while input message; do
 						fi
 					done
 					log "$broker is restarting..."
-					exec "$0" "$@" broker=$broker max_queue_size=$max_queue_size timeout=$timeout prefer_worker=$prefer_worker workers=$workers stamp=$stamp logfile=$logfile
+					exec $0 $(list_args "$@" broker max_queue_size timeout prefer_worker workers stamp logfile)
 				fi
 			fi
 			unset targets
