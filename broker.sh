@@ -4,6 +4,7 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 broker=${broker:-broker}
 max_queue_size=${max_queue_size:-65536}
 timeout=${timeout:-0}
+prefer_worker=${prefer_worker}
 
 stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
 logfile=${logfile:-$(mktemp --suffix .log $(basename -s .sh "$0")-$stamp.XXXX)}
@@ -18,14 +19,17 @@ if [ "$1" != _NC ]; then
 		port=${BASH_REMATCH[2]}
 		shift
 		log "connect to chat system at $addr:$port..."
-		fifo=$(mktemp -u --suffix .fifo .$(basename -s .sh "$0").XXXX)
-		mkfifo $fifo
-		trap "rm -f $fifo;" EXIT
-		nc $addr $port < $fifo | "$0" _NC "$@" stamp=$stamp logfile=$logfile > $fifo && exit 0
-		log "unable to connect $addr:$port"
+		coproc NC { nc -q 0 $addr $port; }
+		sleep ${wait_for_connect:-1}
+		if ps -p $NC_PID >/dev/null 2>&1; then
+			"$0" _NC "$@" stamp=$stamp logfile=$logfile <&${NC[0]} >&${NC[1]}
+			exit 0
+		fi
+		log "failed to connect $addr:$port, host down?"
 		exit 8
 	fi
 elif [ "$1" == _NC ]; then
+	trap 'cleanup 2>/dev/null;' EXIT
 	log "connected to chat system successfully"
 	shift
 fi
@@ -71,7 +75,7 @@ while input message; do
 				cmd[$id]=$command
 				unset with tmz pfz
 				[[ $options =~ timeout=([0-9]+) ]] && tmz=${BASH_REMATCH[1]} || tmz=$timeout
-				[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]}
+				[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]} || pfz=$prefer_worker
 				if (( $tmz )); then
 					tmout[$id]=$(($(date +%s)+$tmz))
 					with+=${with:+ }timeout=$tmz
@@ -432,7 +436,7 @@ while input message; do
 					done
 					log "$broker is restarting..."
 					echo >&2
-					exec "$0" "$@" broker=$broker max_queue_size=$max_queue_size timeout=$timeout workers=$workers stamp=$stamp logfile=$logfile
+					exec "$0" "$@" broker=$broker max_queue_size=$max_queue_size timeout=$timeout prefer_worker=$prefer_worker workers=$workers stamp=$stamp logfile=$logfile
 				fi
 			fi
 			unset targets

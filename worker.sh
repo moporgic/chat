@@ -12,21 +12,24 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
 if [ "$1" != _NC ]; then
-	log "worker version 2022-05-23 (protocol 0)"
+	log "worker version 2022-05-24 (protocol 0)"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ "$1" =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
 		shift
 		log "connect to chat system at $addr:$port..."
-		fifo=$(mktemp -u --suffix .fifo .$(basename -s .sh "$0").XXXX)
-		mkfifo $fifo
-		trap "rm -f $fifo;" EXIT
-		nc $addr $port < $fifo | "$0" _NC "$@" stamp=$stamp logfile=$logfile > $fifo && exit 0
-		log "unable to connect $addr:$port"
+		coproc NC { nc -q 0 $addr $port; }
+		sleep ${wait_for_connect:-1}
+		if ps -p $NC_PID >/dev/null 2>&1; then
+			"$0" _NC "$@" stamp=$stamp logfile=$logfile <&${NC[0]} >&${NC[1]}
+			exit 0
+		fi
+		log "failed to connect $addr:$port, host down?"
 		exit 8
 	fi
 elif [ "$1" == _NC ]; then
+	trap 'cleanup 2>/dev/null;' EXIT
 	log "connected to chat system successfully"
 	shift
 fi
