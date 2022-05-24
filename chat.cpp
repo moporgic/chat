@@ -10,6 +10,7 @@
 #include <chrono>
 #include <ctime>
 #include <iomanip>
+#include <regex>
 #include <boost/asio.hpp>
 #include <boost/format.hpp>
 #include <boost/algorithm/string.hpp>
@@ -161,6 +162,28 @@ protected:
 			std::shared_ptr<client> remote = find_client(who);
 			if (remote) {
 				remote->output() << boost::format("%s >> %s") % self->name() % msg << std::endl;
+
+			} else if (who.find_first_of("*?") != std::string::npos) {
+				boost::replace_all(who, "*", ".*");
+				boost::replace_all(who, "?", ".");
+				std::regex broadcast(who);
+				std::vector<std::shared_ptr<client>> remotes;
+				std::string whos;
+				for (std::shared_ptr<client> remote : list_clients()) {
+					if (std::regex_match(remote->name(), broadcast)) {
+						remotes.push_back(remote);
+						whos += remote->name() + ' ';
+					}
+				}
+				if (whos.size()) {
+					whos.pop_back();
+					self->notify() << boost::format("broadcast: %s") % whos << std::endl;
+					for (std::shared_ptr<client> remote : remotes) {
+						remote->output() << boost::format("%s >> %s") % self->name() % msg << std::endl;
+					}
+				} else {
+					self->reply() << boost::format("failed chat: invalid broadcast") << std::endl;
+				}
 			} else {
 				self->reply() << boost::format("failed chat: invalid client") << std::endl;
 			}
@@ -322,7 +345,7 @@ private:
 
 int main(int argc, char *argv[]) {
 	try {
-		logger << "chat system version 2022-05-15 (protocol 0)" << std::endl;
+		logger << "chat system version 2022-05-25 (protocol 0)" << std::endl;
 
 		boost::asio::io_context io_context;
 		chat::server chat(io_context, argc < 2 ? 10000 : std::stoul(argv[1]));
