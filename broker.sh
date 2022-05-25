@@ -162,33 +162,52 @@ while input message; do
 		type=${BASH_REMATCH[3]}
 		id=${BASH_REMATCH[4]}
 
-		if [ "$type" == "response" ]; then
-			who=${own[$id]}
-		elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
-			who=${assign[$id]}
+		if [[ $id =~ ^[0-9]+$ ]]; then
+			ids=($id)
+			if [ "$type" == "response" ]; then
+				who=${own[$id]}
+			elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
+				who=${assign[$id]}
+			fi
+		else
+			regex=${id}
+			regex=${regex//\*/.*}
+			regex=${regex//\?/.}
+			regex=^$regex=$name$
+			if [ "$type" == "response" ]; then
+				ids=($(for id in ${!own[@]}; do
+					[[ $id=${own[$id]} =~ $regex ]] && echo $id
+				done | sort))
+			elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
+				ids=($(for id in ${!assign[@]}; do
+					[[ $id=${assign[$id]} =~ $regex ]] && echo $id
+				done | sort))
+			fi
+			(( ${#ids[@]} )) && who=$name || who=
 		fi
 
 		if [ "$who" == "$name" ]; then
-			if [ "$type" == "terminate" ] && [[ -v own[$id] ]]; then
-				echo "${own[$id]} << $confirm terminate $id"
-			fi
-
-			if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
-				if [ "$type" == "response" ]; then
-					unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id]
-				elif [ "$type" == "terminate" ]; then
-					unset cmd[$id] own[$id] assign[$id] res[$id] tmout[$id] prefer[$id]
+			for id in ${ids[@]}; do
+				if [ "$type" == "terminate" ] && [[ -v own[$id] ]]; then
+					echo "${own[$id]} << $confirm terminate $id"
 				fi
-				log "confirm that $name ${confirm}ed $type $id"
 
-			elif [ "$confirm" == "reject" ]; then
-				if [ "$type" == "request" ]; then
-					unset assign[$id]
+				if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
+					if [ "$type" == "response" ]; then
+						unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id]
+					elif [ "$type" == "terminate" ]; then
+						unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id] assign[$id]
+					fi
+					log "confirm that $name ${confirm}ed $type $id"
+
+				elif [ "$confirm" == "reject" ]; then
+					if [ "$type" == "request" ]; then
+						unset assign[$id]
+					fi
+					queue=($id ${queue[@]})
+					log "confirm that $name ${confirm}ed $type $id and re-enqueue $id, queue = (${queue[@]})"
 				fi
-				queue=($id ${queue[@]})
-				log "confirm that $name ${confirm}ed $type $id and re-enqueue $id, queue = (${queue[@]})"
-			fi
-
+			done
 		elif [ "$who" ]; then
 			log "ignore that $name ${confirm}ed $type $id since it is owned by $who"
 		else
