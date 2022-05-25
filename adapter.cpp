@@ -127,7 +127,6 @@ std::shared_ptr<task> broker_adapter::wait_until(std::shared_ptr<task> task, tas
 	return task;
 }
 
-//TODO: rename?
 std::regex _regex_message_from("^(\\S+) >> (.+)$");
 std::regex _regex_confirm_request("^(accept|reject) request ([0-9]+ )?\\{(.+)\\}$");
 std::regex _regex_response("^response ([0-9]+) (.+) \\{(.*)\\}$");
@@ -265,13 +264,13 @@ void broker_adapter::handle_input(const std::string& input) {
 		}
 
 	} else if (input.size() && input[0] == '#') { // notification from system
-
+		std::string message = input.substr(2);
+		_log << boost::format("ignore notification '%s'") % message << std::endl;
 	}
 }
 
 void broker_adapter::handle_read_error(error_code ec, size_t n) {
 	if (ec == boost::asio::error::eof || ec == boost::asio::error::operation_aborted) {
-		// TODO: safe? log strings?
 		_log << "socket input stream closed: " << ec << std::endl;
 	} else {
 		_log << "unexpected socket read error: " << ec << std::endl;
@@ -317,10 +316,7 @@ void broker_adapter::disconnect() {
 	if (!thread_) return;
 	_log << "disconnecting..." << std::endl;
 
-	boost::asio::post(io_context_,
-		[this]() {
-			socket_.close();
-		});
+	boost::asio::post(io_context_, [this]() { socket_.close(); });
 	thread_->join();
 	thread_.reset();
 	buffer_.clear();
@@ -406,14 +402,11 @@ boost::asio::io_context& broker_adapter::io_context() {
 int main(int argc, char *argv[]) {
 	try {
 		if (argc != 3) {
-			std::cerr << "Usage: broker_adapter <host> <port>\n";
+			std::cerr << "usage: " << argv[0] << " <host> <port>" << std::endl;
 			return 1;
 		}
 		chat::broker_adapter c;
 		c.connect(argv[1], std::stoul(argv[2]), 1);
-
-		using task = chat::broker_adapter::task;
-		std::map<task::id_t, std::shared_ptr<task>> tasks;
 
 		std::string line;
 		while (std::getline(std::cin, line) && line.size()) {
@@ -421,7 +414,7 @@ int main(int argc, char *argv[]) {
 		}
 
 	} catch (std::exception& e) {
-		std::cerr << "Exception: " << e.what() << "\n";
+		std::cerr << "exception: " << e.what() << "\n";
 	}
 
 	return 0;
