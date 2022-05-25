@@ -29,6 +29,7 @@ if [[ $1 != NC=* ]]; then
 			sleep ${wait_for_conn:-1}
 			if ps -p $NC_PID >/dev/null 2>&1; then
 				$0 NC=$1 "${@:2}" stamp=$stamp logfile=$logfile <&${NC[0]} >&${NC[1]}
+				kill $NC_PID >/dev/null 2>&1
 				tail -n2 $logfile | grep -q "shutdown" && exit 0
 				code=0; wait_for_conn=1
 			else
