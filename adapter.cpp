@@ -9,6 +9,7 @@
 class logger {
 public:
 	void log(const std::string& msg) const {
+#ifndef DISABLE_LOGGING
 		std::chrono::system_clock::time_point tp = std::chrono::system_clock::now();
 		time_t raw_time = std::chrono::system_clock::to_time_t(tp);
 		std::tm* timeinfo = std::localtime(&raw_time);
@@ -17,6 +18,7 @@ public:
 		ss << std::put_time(timeinfo, "%Y-%m-%d %H:%M:%S.") << std::setfill('0') << std::setw(3) << (ms.count() % 1000);
 		ss << ' ' << msg;
 		std::cerr << ss.rdbuf() << std::flush;
+#endif
 	}
 
 	class ostream_adapter : public std::stringstream {
