@@ -13,6 +13,7 @@ trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
 if [[ $1 != NC=* ]]; then
 	log "worker version 2022-05-25 (protocol 0)"
+	log "options: $@"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
