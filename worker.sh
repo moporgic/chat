@@ -107,7 +107,7 @@ echo "protocol 0"
 while input message; do
 	if [[ $message =~ $regex_request ]]; then
 		requester=${BASH_REMATCH[1]}
-		id=${BASH_REMATCH[4]:-$((++id_counter))}
+		id=${BASH_REMATCH[4]:-${id_next:-1}}; id_next=$((id+1))
 		command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
 		options=${BASH_REMATCH[7]}
 		observe_state
