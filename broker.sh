@@ -75,7 +75,7 @@ regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
 regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
 regex_worker_state="^(\S+) >> state (idle|busy)$"
 regex_terminate="^(\S+) >> terminate (\S+)$"
-regex_others="^(\S+) >> (query|operate|set|unset|use|subscribe|unsubscribe) (.+)$"
+regex_others="^(\S+) >> (query|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
 regex_chat_system="^(#|%) (.+)$"
 regex_ignore_silently="^(\S+ >> confirm restart)$"
 
@@ -478,6 +478,32 @@ while input message; do
 				fi
 			fi
 			unset targets
+
+		elif [ "$command $options" == "query envinfo" ]; then
+			if [ -e envinfo.sh ]; then
+				echo "$name << accept query envinfo"
+				log "accept query envinfo from $name"
+				{
+					envinfo=$(bash envinfo.sh 2>/dev/null)
+					echo "$name << result envinfo ($(<<<$envinfo wc -l))"
+					<<< $envinfo xargs -r -d'\n' -L1 echo "$name << #"
+				} &
+			else
+				echo "$name << reject query envinfo"
+				log "reject query envinfo from $name; not installed"
+			fi
+
+		elif [ "$command" == "shell" ]; then
+			[[ $options =~ ^(\{(.+)\}|(.+))$ ]] && options=${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}
+			echo "$name << accept execute shell {$options}"
+			log "accept execute shell {$options} from $name"
+			{
+				output=$(eval "$options" 2>&1)
+				code=$?
+				lines=$((${#output} ? $(<<<$output wc -l) : 0))
+				echo "$name << result shell {$options} return $code ($lines)"
+				echo -n "$output" | xargs -r -d'\n' -L1 echo "$name << #"
+			} &
 
 		else
 			log "ignore $command $options from $name"

@@ -98,7 +98,7 @@ regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
 regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
 regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (\S+)$"
 regex_terminate="^(\S+) >> terminate (\S+)$"
-regex_others="^(\S+) >> (operate|set|unset|use|query) (.+)$"
+regex_others="^(\S+) >> (operate|shell|set|unset|use|query) (.+)$"
 regex_chat_system="^(#|%) (.+)$"
 
 log "verify chat system protocol 0..."
@@ -282,17 +282,6 @@ while input message; do
 			done
 			log "accept query jobs from $name"
 
-		elif [ "$command $options" == "query envinfo" ]; then
-			if [ -e envinfo.sh ]; then
-				envinfo=$(bash envinfo.sh 2>/dev/null)
-				echo "$name << accept query envinfo ($(<<<$envinfo wc -l))"
-				<<< $envinfo xargs -r -L1 echo "$name << #"
-				log "accept query envinfo from $name"
-			else
-				echo "$name << reject query envinfo"
-				log "reject query envinfo from $name; not installed"
-			fi
-
 		elif [ "$command $options" == "operate shutdown" ]; then
 			echo "$name << confirm shutdown"
 			log "accept operate shutdown from $name"
@@ -303,6 +292,32 @@ while input message; do
 			log "accept operate restart from $name"
 			log "$worker is restarting..."
 			exec $0 $(list_args "$@" broker worker max_num_jobs state_file stamp logfile)
+
+		elif [ "$command $options" == "query envinfo" ]; then
+			if [ -e envinfo.sh ]; then
+				echo "$name << accept query envinfo"
+				log "accept query envinfo from $name"
+				{
+					envinfo=$(bash envinfo.sh 2>/dev/null)
+					echo "$name << result envinfo ($(<<<$envinfo wc -l))"
+					<<< $envinfo xargs -r -d'\n' -L1 echo "$name << #"
+				} &
+			else
+				echo "$name << reject query envinfo"
+				log "reject query envinfo from $name; not installed"
+			fi
+
+		elif [ "$command" == "shell" ]; then
+			[[ $options =~ ^(\{(.+)\}|(.+))$ ]] && options=${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}
+			echo "$name << accept execute shell {$options}"
+			log "accept execute shell {$options} from $name"
+			{
+				output=$(eval "$options" 2>&1)
+				code=$?
+				lines=$((${#output} ? $(<<<$output wc -l) : 0))
+				echo "$name << result shell {$options} return $code ($lines)"
+				echo -n "$output" | xargs -r -d'\n' -L1 echo "$name << #"
+			} &
 
 		else
 			log "ignore $command $options from $name"
