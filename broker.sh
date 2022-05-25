@@ -151,8 +151,8 @@ while input message; do
 				for subscriber in ${notify[$status]}; do
 					echo "$subscriber << notify $worker state $status"
 				done
-				subscribers=${notify[$status]}
-				log "state has been changed, notify ${subscribers// /, }"
+				subscribers=(${notify[$status]})
+				log "state has been changed, notify ${subscribers[@]}"
 			fi
 		fi
 
@@ -217,15 +217,15 @@ while input message; do
 		message=${BASH_REMATCH[2]}
 
 		if [ "$type" == "#" ]; then
-			names=(${own[@]} ${!state[@]})
-			names=${names[@]}
-			regex_logout="^logout: (${names// /|})$"
-			regex_rename="^name: (${names// /|}) becomes (\S+)$"
+			regex_logout="^logout: (\S+)$"
+			regex_rename="^name: (\S+) becomes (\S+)$"
 
 			if [[ $message =~ $regex_logout ]]; then
 				name=${BASH_REMATCH[1]}
 				log "$name logged out"
 				if [[ -v state[$name] ]]; then
+					unset state[$name]
+					log "discard the worker state of $name"
 					for id in ${!assign[@]}; do
 						if [ "${assign[$id]}" == "$name" ]; then
 							unset assign[$id]
@@ -233,7 +233,6 @@ while input message; do
 							log "revoke assigned request $id and re-enqueue $id, queue = (${queue[@]})"
 						fi
 					done
-					unset state[$name]
 				fi
 				for id in ${!own[@]}; do
 					if [ "${own[$id]}" == "$name" ] && ! [ "${keep_unowned_tasks}" ]; then
@@ -265,21 +264,25 @@ while input message; do
 				new_name=${BASH_REMATCH[2]}
 				log "$old_name renamed as $new_name"
 				if [[ -v state[$old_name] ]]; then
+					state[$new_name]=${state[$old_name]}
+					unset state[$old_name]
+					log "transfer the worker state to $new_name"
 					for id in ${!assign[@]}; do
 						if [ "${assign[$id]}" == "$old_name" ]; then
+							log "transfer the ownership of assignment $id"
 							assign[$id]=$new_name
 						fi
 					done
-					state[$new_name]=${state[$old_name]}
-					unset state[$old_name]
 				fi
 				for id in ${!own[@]}; do
 					if [ "${own[$id]}" == "$old_name" ]; then
+						log "transfer the ownerships of request $id and response $id"
 						own[$id]=$new_name
 					fi
 				done
 				for item in ${!notify[@]}; do
 					if [[ " ${notify[$item]} " == *" $old_name "* ]]; then
+						log "transfer the $item subscription to $new_name"
 						notify[$item]=$(printf "%s\n" ${notify[$item]} $new_name | sed "/^${old_name}$/d")
 						news[$item-$new_name]=${news[$item-$old_name]}
 						unset news[$item-$old_name]
