@@ -122,7 +122,7 @@ while input message; do
 		output=${BASH_REMATCH[4]}
 
 		if [ "${assign[$id]}" == "$worker" ]; then
-			unset assign[$id] tmout[$id] prefer[$id]
+			unset assign[$id] tmout[$id]
 			echo "$worker << accept response $id"
 			if [[ -v cmd[$id] ]]; then
 				res[$id]=$code:$output
@@ -193,9 +193,7 @@ while input message; do
 				fi
 
 				if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
-					if [ "$type" == "response" ]; then
-						unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id]
-					elif [ "$type" == "terminate" ]; then
+					if [ "$type" == "response" ] || [ "$type" == "terminate" ]; then
 						unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id] assign[$id]
 					fi
 					log "confirm that $name ${confirm}ed $type $id"
@@ -494,8 +492,11 @@ while input message; do
 					queue=" ${queue[@]} "
 					queue=(${queue/ $id / })
 				fi
-				echo "${own[$id]} << response $id timeout {}"
-				unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id]
+				unset assign[$id] tmout[$id]
+				code="timeout"
+				output=
+				res[$id]=$code:$output
+				echo "${own[$id]} << response $id $code {$output}"
 			fi
 		done
 
