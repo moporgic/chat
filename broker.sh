@@ -543,15 +543,17 @@ while input message; do
 
 	if (( ${#queue[@]} )); then
 		sort_by_occurrence() { sort | uniq -c | sort -h | xargs -r -L1 | cut -d' ' -f2; }
-		ranking=($(echo -n ${!state[@]} ${assign[@]} | xargs -r -d' ' -L1 | sort_by_occurrence))
+		ranking=($(echo -n ${!state[@]} ${assign[@]} | xargs -r -d' ' -L1 | sort_by_occurrence | \
+		           while read worker; do [ ${state[$worker]} == "idle" ] && echo $worker; done))
 		for id in ${queue[@]}; do
-			pref=${prefer[$id]:-"*"}
 			for worker in ${ranking[@]}; do
-				if [ "${state[$worker]}" == "idle" ] && [[ $worker == $pref ]]; then
+				if [[ $worker == ${prefer[$id]:-*} ]]; then
 					echo "$worker << request $id {${cmd[$id]}}"
 					log "assign request $id to $worker"
 					state[$worker]="hold"
 					assign[$id]=$worker
+					ranking=" ${ranking[@]} "
+					ranking=(${ranking/ $worker / })
 					queue=" ${queue[@]} "
 					queue=(${queue/ $id / })
 					break
