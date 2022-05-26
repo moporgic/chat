@@ -12,7 +12,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
 if [[ $1 != NC=* ]]; then
-	log "broker version 2022-05-25 (protocol 0)"
+	log "broker version 2022-05-26 (protocol 0)"
 	log "options: $@"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
@@ -195,10 +195,16 @@ while input message; do
 				fi
 
 				if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
-					if [ "$type" == "response" ] || [ "$type" == "terminate" ]; then
+					log "confirm that $name ${confirm}ed $type $id"
+					if [ "$type" == "request" ]; then
+						assign[$id]=$name
+						if [[ -v news[assign-${own[$id]}] ]]; then
+							echo "${own[$id]} << notify assign request $id to $name"
+							log "assigned request $id to $name, notify ${own[$id]}"
+						fi
+					elif [ "$type" == "response" ] || [ "$type" == "terminate" ]; then
 						unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id] assign[$id]
 					fi
-					log "confirm that $name ${confirm}ed $type $id"
 
 				elif [ "$confirm" == "reject" ]; then
 					if [ "$type" == "request" ]; then
@@ -541,16 +547,10 @@ while input message; do
 		for worker in ${!state[@]}; do
 			if [ "${state[$worker]}" == "idle" ] && [[ $worker == $pref ]]; then
 				echo "$worker << request $id {${cmd[$id]}}"
+				log "assign request $id to $worker"
 				state[$worker]="hold"
 				assign[$id]=$worker
 				queue=(${queue[@]:1})
-
-				if [[ -v news[assign-${own[$id]}] ]]; then
-					echo "${own[$id]} << notify assign request $id to $worker"
-					log "assign request $id to $worker, notify ${own[$id]}"
-				else
-					log "assign request $id to $worker"
-				fi
 				unset id
 				break
 			fi
