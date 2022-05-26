@@ -30,4 +30,6 @@ fi
 nvidia-smi -L 2>/dev/null | sed -E "s/ \(UUID:.+$//g" | while IFS= read GPU; do echo "$GPU"; done
 # memory info
 size=($(head -n1 /proc/meminfo))
-echo "RAM: $(printf "%.1fG" $(<<< "${size[1]}/1024/1024" bc -l))"
+size=$((${size[1]}0/1024/1024))
+size=$((size/10)).$((size%10))
+echo "RAM: $(printf "%.1fG" $size)"
