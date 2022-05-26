@@ -76,8 +76,7 @@ regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
 regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
 regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
 regex_worker_state="^(\S+) >> state (idle|busy)$"
-regex_terminate="^(\S+) >> terminate (\S+)$"
-regex_others="^(\S+) >> (query|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
+regex_others="^(\S+) >> (query|terminate|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
 regex_chat_system="^(#|%) (.+)$"
 regex_ignore_silently="^(\S+ >> confirm restart)$"
 
@@ -321,29 +320,6 @@ while input message; do
 			fi
 		fi
 
-	elif [[ $message =~ $regex_terminate ]]; then
-		name=${BASH_REMATCH[1]}
-		id=${BASH_REMATCH[2]}
-
-		if [[ -v assign[$id] ]]; then
-			if [ "$name" == "${own[$id]}" ]; then
-				echo "${assign[$id]} << terminate $id"
-				log "accept terminate $id from $name and forward it to ${assign[$id]}"
-			else
-				echo "$name << reject terminate $id"
-				log "reject terminate $id from $name since it is owned by ${own[$id]}"
-			fi
-		elif [[ -v cmd[$id] ]]; then
-			queue=" ${queue[@]} "
-			queue=(${queue/ $id / })
-			unset cmd[$id] own[$id] tmout[$id] prefer[$id]
-			echo "$name << accept terminate $id"
-			log "accept terminate $id from $name and remove it from queue"
-		else
-			echo "$name << reject terminate $id"
-			log "reject terminate $id from $name since it is nonexistent"
-		fi
-
 	elif [[ $message =~ $regex_others ]]; then
 		name=${BASH_REMATCH[1]}
 		command=${BASH_REMATCH[2]}
@@ -408,6 +384,27 @@ while input message; do
 			done
 			echo "$name << state = (${status[@]})"
 			log "accept query state from $name"
+
+		elif [ "$command" == "terminate" ]; then
+			id=$options
+			if [[ -v assign[$id] ]]; then
+				if [ "$name" == "${own[$id]}" ]; then
+					echo "${assign[$id]} << terminate $id"
+					log "accept terminate $id from $name and forward it to ${assign[$id]}"
+				else
+					echo "$name << reject terminate $id"
+					log "reject terminate $id from $name since it is owned by ${own[$id]}"
+				fi
+			elif [[ -v cmd[$id] ]]; then
+				queue=" ${queue[@]} "
+				queue=(${queue/ $id / })
+				unset cmd[$id] own[$id] tmout[$id] prefer[$id]
+				echo "$name << accept terminate $id"
+				log "accept terminate $id from $name and remove it from queue"
+			else
+				echo "$name << reject terminate $id"
+				log "reject terminate $id from $name since no such request"
+			fi
 
 		elif [[ "$command $options" =~ $regex_subscribe ]]; then
 			item=$options
