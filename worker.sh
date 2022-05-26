@@ -240,6 +240,10 @@ while input message; do
 				log "accept query state from $name"
 				notify_state $name
 
+			elif [ "$options" == "capacity" ] || [ "$options" == "max_num_jobs" ]; then
+				echo "$name << capacity = $max_num_jobs"
+				log "accept query capacity from $name, capacity = $max_num_jobs"
+
 			elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
 				ids=($(for id in ${ids[@]}; do [[ -v cmd[$id] ]] && echo $id; done))
