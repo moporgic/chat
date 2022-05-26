@@ -94,13 +94,18 @@ broker_adapter::broker_adapter(const std::string& name, const std::string& broke
 broker_adapter::~broker_adapter() { disconnect(); }
 
 std::shared_ptr<task> broker_adapter::request(const std::string& command, task::state_t state, time_t timeout) {
+	return request(command, {}, state, timeout);
+}
+
+std::shared_ptr<task> broker_adapter::request(const std::string& command, const std::string& options, task::state_t state, time_t timeout) {
 	std::shared_ptr<task> task = std::make_shared<broker_adapter::task>();
 	{
 		std::scoped_lock lock(task_mutex_);
 		task->command_ = command;
 		unconfirmed_.push_back(task);
-		async_output("request {" + command + '}');
-		_log << "request {" + command + "} has been sent" << std::endl;
+		std::string request = stringify_request(command, options);
+		async_output(request);
+		_log << request << " has been sent" << std::endl;
 	}
 	return (state >= task::state_unconfirmed) ? wait_until(task, state, timeout) : task;
 }
@@ -224,7 +229,7 @@ void broker_adapter::handle_input(const std::string& input) {
 					task->state_ = task::state_assigned;
 					notify_all_waits();
 
-					on_task_assigned(task);
+					on_task_assigned(task, worker);
 					_log << boost::format("confirm request %llu assigned to worker %s") % id % worker << std::endl;
 
 				} else {
@@ -237,7 +242,7 @@ void broker_adapter::handle_input(const std::string& input) {
 					notify_all_waits();
 					_log << boost::format("handshake with %s successfully") % broker_ << std::endl;
 
-					for (const std::string& item : subscribed_items()) {
+					for (const std::string& item : list_subscribed_items()) {
 						async_output("subscribe " + item);
 					}
 				} else {
@@ -292,7 +297,20 @@ void broker_adapter::handle_handshake_error(const std::string& msg) {
 	disconnect();
 }
 
-std::list<std::string> broker_adapter::subscribed_items() const {
+std::string broker_adapter::stringify_request(const std::string& command, const std::string& options) const {
+	std::string request;
+	request.reserve(command.size() + options.size() + 20);
+	request += "request {";
+	request += command;
+	request += '}';
+	if (options.size()) {
+		request += " with ";
+		request += options;
+	}
+	return request;
+}
+
+std::list<std::string> broker_adapter::list_subscribed_items() const {
 	return {"idle", "assign"};
 }
 

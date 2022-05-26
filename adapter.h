@@ -57,9 +57,11 @@ public:
 
 	std::shared_ptr<task> request(const std::string& command, task::state_t state = task::state_confirmed, time_t timeout = 0);
 
+	std::shared_ptr<task> request(const std::string& command, const std::string& options, task::state_t state = task::state_confirmed, time_t timeout = 0);
+
 	std::shared_ptr<task> terminate(std::shared_ptr<task> task, time_t timeout = 0);
 
-	std::shared_ptr<task> wait_until(std::shared_ptr<task> task, task::state_t state = task::state_confirmed, time_t timeout = 0);
+	std::shared_ptr<task> wait_until(std::shared_ptr<task> task, task::state_t state = task::state_completed, time_t timeout = 0);
 
 protected:
 
@@ -67,7 +69,7 @@ protected:
 
 	virtual void on_task_confirmed(std::shared_ptr<task> task, bool accepted) {}
 
-	virtual void on_task_assigned(std::shared_ptr<task> task) {}
+	virtual void on_task_assigned(std::shared_ptr<task> task, const std::string& worker) {}
 
 	virtual void on_idle_worker(const std::string& worker) {}
 
@@ -85,7 +87,11 @@ protected:
 
 	virtual void handle_handshake_error(const std::string& msg);
 
-	virtual std::list<std::string> subscribed_items() const;
+protected:
+
+	virtual std::string stringify_request(const std::string& command, const std::string& options) const;
+
+	virtual std::list<std::string> list_subscribed_items() const;
 
 public:
 
