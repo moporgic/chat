@@ -235,32 +235,57 @@ while input message; do
 		command=${BASH_REMATCH[2]}
 		options=${BASH_REMATCH[3]}
 
-		regex_set="^set ([^= ]+)([= ].+)?$"
-		regex_unset="^unset ([^= ]+)$"
-		regex_query_jobs="^query (request|job)s?(.*)$"
+		if [ "$command" == "query" ]; then
+			if [ "$options" == "state" ]; then
+				log "accept query state from $name"
+				notify_state $name
 
-		if [[ "$command $options" =~ $regex_set ]]; then
-			var=${BASH_REMATCH[1]}
-			val=${BASH_REMATCH[2]:1}
+			elif [[ "$options" =~ ^(request|job)s?(.*)$ ]] ; then
+				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+				echo "$name << jobs = (${ids[@]})"
+				for id in ${ids[@]}; do
+					echo "$name << # request $(printf %${#ids[-1]}d $id) ${own[$id]} {${cmd[$id]}}"
+				done
+				log "accept query jobs from $name, jobs = (${ids[@]})"
+
+			elif [ "$options" == "envinfo" ]; then
+				if [ -e envinfo.sh ]; then
+					echo "$name << accept query envinfo"
+					log "accept query envinfo from $name"
+					{
+						envinfo=$(bash envinfo.sh 2>/dev/null)
+						echo "$name << result envinfo ($(<<<$envinfo wc -l))"
+						<<< $envinfo xargs -r -d'\n' -L1 echo "$name << #"
+					} &
+				else
+					echo "$name << reject query envinfo"
+					log "reject query envinfo from $name; not installed"
+				fi
+			else
+				log "ignore $command $options from $name"
+			fi
+
+		elif [ "$command" == "set" ]; then
+			var=(${options/=/ }); var=${var[0]}
+			val=${options:$((${#var}+1))}
 			echo "$name << accept set ${var}${val:+ ${val}}"
 			declare val_old="${!var}" $var="$val"
-			log "accept set ${var}${val:+ as ${val}} from $name"
+			log "accept set ${var}${val:+=\"${val}\"} from $name"
 			if [ "$var" == "broker" ]; then
 				log "broker has been changed, make handshake (protocol 0) with $broker again..."
 				echo "$broker << use protocol 0"
 			elif [ "$var" == "worker" ]; then
 				log "worker name has been changed, register $worker on the chat system..."
 				echo "name ${worker:=worker-1}"
-			elif [ "$var" == "max_num_jobs" ]; then
+			elif [ "$var" == "max_num_jobs" ] || [ "$var" == "observe_state" ]; then
 				observe_state; notify_state
 			elif [ "$var" == "state" ]; then
 				notify_state
 			fi
 
-		elif [[ "$command $options" =~ $regex_unset ]]; then
-			var=${BASH_REMATCH[1]}
-			regex_forbidden_unset="^(broker|worker|state)$"
-			if [ "$var" ] && ! [[ $var =~ $regex_forbidden_unset ]]; then
+		elif [ "$command" == "unset" ]; then
+			var=$options
+			if [ "$var" ] && ! [[ $var =~ ^(broker|worker|state)$ ]]; then
 				echo "$name << accept unset $var"
 				unset $var
 				log "accept unset $var from $name"
@@ -269,41 +294,20 @@ while input message; do
 				echo "$name << reject unset $var"
 			fi
 
-		elif [ "$command $options" == "query state" ]; then
-			log "accept query state from $name"
-			notify_state $name
+		elif [ "$command" == "operate" ]; then
+			if [ "$options" == "shutdown" ]; then
+				echo "$name << confirm shutdown"
+				log "accept operate shutdown from $name"
+				exit 0
 
-		elif [[ "$command $options" =~ $regex_query_jobs ]] ; then
-			ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
-			echo "$name << jobs = (${ids[@]})"
-			for id in ${ids[@]}; do
-				echo "$name << # request $(printf %${#ids[-1]}d $id) ${own[$id]} {${cmd[$id]}}"
-			done
-			log "accept query jobs from $name"
+			elif [ "$options" == "restart" ]; then
+				echo "$name << confirm restart"
+				log "accept operate restart from $name"
+				log "$worker is restarting..."
+				exec $0 $(list_args "$@" broker worker max_num_jobs observe_state stamp logfile)
 
-		elif [ "$command $options" == "operate shutdown" ]; then
-			echo "$name << confirm shutdown"
-			log "accept operate shutdown from $name"
-			exit 0
-
-		elif [ "$command $options" == "operate restart" ]; then
-			echo "$name << confirm restart"
-			log "accept operate restart from $name"
-			log "$worker is restarting..."
-			exec $0 $(list_args "$@" broker worker max_num_jobs observe_state stamp logfile)
-
-		elif [ "$command $options" == "query envinfo" ]; then
-			if [ -e envinfo.sh ]; then
-				echo "$name << accept query envinfo"
-				log "accept query envinfo from $name"
-				{
-					envinfo=$(bash envinfo.sh 2>/dev/null)
-					echo "$name << result envinfo ($(<<<$envinfo wc -l))"
-					<<< $envinfo xargs -r -d'\n' -L1 echo "$name << #"
-				} &
 			else
-				echo "$name << reject query envinfo"
-				log "reject query envinfo from $name; not installed"
+				log "ignore $command $options from $name"
 			fi
 
 		elif [ "$command" == "shell" ]; then

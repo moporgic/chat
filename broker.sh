@@ -325,65 +325,63 @@ while input message; do
 		command=${BASH_REMATCH[2]}
 		options=${BASH_REMATCH[3]}
 
-		regex_use_protocol="^use protocol (\S+)$"
-		regex_query_jobs="^query (request|job)s?(.*)$"
-		regex_query_results="^query (response|result)s?(.*)$"
-		regex_query_assign="^query (assign(ment)?|task)s?$"
-		regex_query_state="^query (state|worker)s?$"
-		regex_subscribe="^(subscribe|unsubscribe) (idle|busy|assign)$"
-		regex_set="^set ([^= ]+)([= ].+)?$"
-		regex_unset="^unset ([^= ]+)$"
-		regex_operate_power="^operate (shutdown|restart) ?(.*)$"
+		if [ "$command" == "query" ]; then
+			if [ "$options" == "protocol" ]; then
+				echo "$name << protocol 0"
+				log "accept query protocol from $name"
 
-		if [ "$command $options" == "query protocol" ]; then
-			echo "$name << protocol 0"
-			log "accept query protocol from $name"
+			elif [ "$options" == "queue" ]; then
+				echo "$name << queue = (${queue[@]})"
+				log "accept query queue from $name, queue = (${queue[@]})"
 
-		elif [[ "$command $options" =~ $regex_use_protocol ]]; then
-			protocol=${BASH_REMATCH[1]}
-			if [ "$protocol" == "0" ]; then
-				echo "$name << accept protocol $protocol"
-				log "accept use protocol $protocol from $name"
+			elif [[ "$options" =~ ^(state|worker)s?$ ]]; then
+				status=()
+				for worker in ${!state[@]}; do
+					status+=("[$worker]=${state[$worker]}")
+				done
+				echo "$name << state = (${status[@]})"
+				log "accept query state from $name, state = (${status[@]})"
+
+			elif [[ "$options" =~ ^(request|job)s?(.*)$ ]] ; then
+				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+				echo "$name << jobs = (${ids[@]})"
+				for id in ${ids[@]}; do
+					echo "$name << # request $(printf %${#ids[-1]}d $id) ${own[$id]} {${cmd[$id]}}"
+				done
+				log "accept query jobs from $name, jobs = (${ids[@]})"
+
+			elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
+				ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
+				echo "$name << results = (${ids[@]})"
+				for id in ${ids[@]}; do
+					echo "$name << # response $(printf %${#ids[-1]}d $id) ${res[$id]%%:*} {${res[$id]#*:}}"
+				done
+				log "accept query results from $name, results = (${ids[@]})"
+
+			elif [[ "$options" =~ ^(assign(ment)?|task)s?$ ]]; then
+				assignment=()
+				for id in ${!assign[@]}; do
+					assignment+=("[$id]=${assign[$id]}")
+				done
+				echo "$name << assign = (${assignment[@]})"
+				log "accept query assign from $name, assign = (${assignment[@]})"
+
+			elif [ "$options" == "envinfo" ]; then
+				if [ -e envinfo.sh ]; then
+					echo "$name << accept query envinfo"
+					log "accept query envinfo from $name"
+					{
+						envinfo=$(bash envinfo.sh 2>/dev/null)
+						echo "$name << result envinfo ($(<<<$envinfo wc -l))"
+						<<< $envinfo xargs -r -d'\n' -L1 echo "$name << #"
+					} &
+				else
+					echo "$name << reject query envinfo"
+					log "reject query envinfo from $name; not installed"
+				fi
 			else
-				echo "$name << reject protocol $protocol"
-				log "reject use protocol $protocol from $name, unsupported protocol"
+				log "ignore $command $options from $name"
 			fi
-
-		elif [ "$command $options" == "query queue" ]; then
-			echo "$name << queue = (${queue[@]})"
-			log "accept query queue from $name"
-
-		elif [[ "$command $options" =~ $regex_query_jobs ]] ; then
-			ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
-			echo "$name << jobs = (${ids[@]})"
-			for id in ${ids[@]}; do
-				echo "$name << # request $(printf %${#ids[-1]}d $id) ${own[$id]} {${cmd[$id]}}"
-			done
-			log "accept query jobs from $name"
-
-		elif [[ "$command $options" =~ $regex_query_results ]] ; then
-			ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
-			echo "$name << results = (${ids[@]})"
-			for id in ${ids[@]}; do
-				echo "$name << # response $(printf %${#ids[-1]}d $id) ${res[$id]%%:*} {${res[$id]#*:}}"
-			done
-			log "accept query results from $name"
-
-		elif [[ "$command $options" =~ $regex_query_assign ]]; then
-			assignment=()
-			for id in ${!assign[@]}; do
-				assignment+=("[$id]=${assign[$id]}")
-			done
-			echo "$name << assign = (${assignment[@]})"
-			log "accept query assign from $name"
-
-		elif [[ "$command $options" =~ $regex_query_state ]]; then
-			status=()
-			for worker in ${!state[@]}; do
-				status+=("[$worker]=${state[$worker]}")
-			done
-			echo "$name << state = (${status[@]})"
-			log "accept query state from $name"
 
 		elif [ "$command" == "terminate" ]; then
 			id=$options
@@ -406,40 +404,53 @@ while input message; do
 				log "reject terminate $id from $name since no such request"
 			fi
 
-		elif [[ "$command $options" =~ $regex_subscribe ]]; then
-			item=$options
-			if [ "$command" == "subscribe" ]; then
-				notify[$item]=$(printf "%s\n" ${notify[$item]} $name | sort | uniq)
-				news[$item-$name]=subscribe
-				echo "$name << accept $command $options"
-				log "accept $command $options from $name"
-				for worker in ${!state[@]}; do
-					if [ "${state[$worker]}" == "$item" ]; then
-						echo "$name << notify $worker state $item"
-					fi
-				done
-			elif [ "$command" == "unsubscribe" ]; then
-				notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${name}$/d")
-				unset news[$item-$name]
-				echo "$name << accept $command $options"
-				log "accept $command $options from $name"
+		elif [ "$command" == "use" ]; then
+			regex_use_protocol="^protocol (\S+)$"
+			if [[ "$options" =~ $regex_use_protocol ]]; then
+				protocol=${BASH_REMATCH[1]}
+				if [ "$protocol" == "0" ]; then
+					echo "$name << accept protocol $protocol"
+					log "accept use protocol $protocol from $name"
+				else
+					echo "$name << reject protocol $protocol"
+					log "reject use protocol $protocol from $name, unsupported protocol"
+				fi
+			else
+				log "ignore $command $options from $name"
 			fi
 
-		elif [[ "$command $options" =~ $regex_set ]]; then
-			var=${BASH_REMATCH[1]}
-			val=${BASH_REMATCH[2]:1}
+		elif [ "$command" == "subscribe" ]; then
+			item=$options
+			notify[$item]=$(printf "%s\n" ${notify[$item]} $name | sort | uniq)
+			news[$item-$name]=subscribe
+			echo "$name << accept $command $options"
+			log "accept $command $options from $name"
+			for worker in ${!state[@]}; do
+				if [ "${state[$worker]}" == "$item" ]; then
+					echo "$name << notify $worker state $item"
+				fi
+			done
+
+		elif [ "$command" == "unsubscribe" ]; then
+			item=$options
+			notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${name}$/d")
+			unset news[$item-$name]
+			echo "$name << accept $command $options"
+			log "accept $command $options from $name"
+
+		elif [ "$command" == "set" ]; then
+			var=(${options/=/ }); var=${var[0]}
+			val=${options:$((${#var}+1))}
 			echo "$name << accept set ${var}${val:+ ${val}}"
 			declare val_old="${!var}" $var="$val"
-			log "accept set ${var}${val:+ as ${val}} from $name"
-			if [ "$val" != "$val_old" ]; then
-				if [ "$var" == "broker" ]; then
-					log "broker name has been changed, register $broker on the chat system..."
-					echo "name $broker"
-				fi
+			log "accept set ${var}${val:+=\"${val}\"} from $name"
+			if [ "$var" == "broker" ]; then
+				log "broker name has been changed, register $broker on the chat system..."
+				echo "name $broker"
 			fi
 
-		elif [[ "$command $options" =~ $regex_unset ]]; then
-			var=${BASH_REMATCH[1]}
+		elif [ "$command" == "unset" ]; then
+			var=$options
 			if [ "$var" ] && [ "$var" != "broker" ]; then
 				echo "$name << accept unset $var"
 				unset $var
@@ -449,53 +460,45 @@ while input message; do
 				echo "$name << reject unset $var"
 			fi
 
-		elif [[ "$command $options" =~ $regex_operate_power ]]; then
-			type=${BASH_REMATCH[1]}
-			matches=( $(<<<${BASH_REMATCH[2]:-$broker} grep -Eo '\S+' | while IFS= read -r match; do
-				for client in ${!state[@]} $broker; do
-					[[ $client == $match ]] && echo $client
-				done
-			done) )
-			declare -A targets
-			for match in ${matches[@]}; do targets[$match]=$type; done
+		elif [ "$command" == "operate" ]; then
+			regex_operate_power="^(shutdown|restart) ?(.*)$"
 
-			for target in ${!targets[@]}; do
-				if [[ -v state[$target] ]]; then
-					echo "$name << confirm $type $target"
-					log "accept operate $type on $target from $name"
-					echo "$target << operate $type"
-				fi
-			done
-			if [[ -v targets[$broker] ]]; then
-				echo "$name << confirm $type $broker"
-				log "accept operate $type on $broker from $name"
-				if [ "$type" == "shutdown" ]; then
-					exit 0
-				elif [ "$type" == "restart" ]; then
-					unset workers
-					for worker in ${!state[@]}; do
-						if ! [[ -v targets[$worker] ]]; then
-							workers+=${workers:+:}$worker
-						fi
+			if [[ "$options" =~ $regex_operate_power ]]; then
+				type=${BASH_REMATCH[1]}
+				matches=( $(<<<${BASH_REMATCH[2]:-$broker} grep -Eo '\S+' | while IFS= read -r match; do
+					for client in ${!state[@]} $broker; do
+						[[ $client == $match ]] && echo $client
 					done
-					log "$broker is restarting..."
-					exec $0 $(list_args "$@" broker max_queue_size timeout prefer_worker workers stamp logfile)
-				fi
-			fi
-			unset targets
+				done) )
+				declare -A targets
+				for match in ${matches[@]}; do targets[$match]=$type; done
 
-		elif [ "$command $options" == "query envinfo" ]; then
-			if [ -e envinfo.sh ]; then
-				echo "$name << accept query envinfo"
-				log "accept query envinfo from $name"
-				{
-					envinfo=$(bash envinfo.sh 2>/dev/null)
-					echo "$name << result envinfo ($(<<<$envinfo wc -l))"
-					<<< $envinfo xargs -r -d'\n' -L1 echo "$name << #"
-				} &
+				for target in ${!targets[@]}; do
+					if [[ -v state[$target] ]]; then
+						echo "$name << confirm $type $target"
+						log "accept operate $type on $target from $name"
+						echo "$target << operate $type"
+					fi
+				done
+				if [[ -v targets[$broker] ]]; then
+					echo "$name << confirm $type $broker"
+					log "accept operate $type on $broker from $name"
+					if [ "$type" == "shutdown" ]; then
+						exit 0
+					elif [ "$type" == "restart" ]; then
+						unset workers
+						for worker in ${!state[@]}; do
+							if ! [[ -v targets[$worker] ]]; then
+								workers+=${workers:+:}$worker
+							fi
+						done
+						log "$broker is restarting..."
+						exec $0 $(list_args "$@" broker max_queue_size timeout prefer_worker workers stamp logfile)
+					fi
+				fi
+				unset targets
 			else
-				echo "$name << reject query envinfo"
-				log "reject query envinfo from $name; not installed"
+				log "ignore $command $options from $name"
 			fi
 
 		elif [ "$command" == "shell" ]; then
