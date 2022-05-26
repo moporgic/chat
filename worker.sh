@@ -3,7 +3,7 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
 worker=${worker:-worker-1}
-max_num_jobs=${max_num_jobs:-1}
+max_num_jobs=${max_num_jobs:-$(nproc)}
 state_file=${state_file}
 
 stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
