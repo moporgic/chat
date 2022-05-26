@@ -139,7 +139,7 @@ while input message; do
 			if [ "${own[$id]}" == "$who" ]; then
 				unset own[$id] cmd[$id] pid[$id]
 				log "confirm that $who ${confirm}ed response $id"
-				observe_state; notify_state
+				observe_state && notify_state
 			else
 				log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
 			fi
@@ -288,7 +288,7 @@ while input message; do
 				log "worker name has been changed, register $worker on the chat system..."
 				echo "name ${worker:=worker-1}"
 			elif [ "$var" == "max_num_jobs" ] || [ "$var" == "observe_state" ]; then
-				observe_state; notify_state
+				observe_state && notify_state
 			elif [ "$var" == "state" ]; then
 				notify_state
 			fi
