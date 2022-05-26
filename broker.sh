@@ -541,25 +541,24 @@ while input message; do
 		log "ignore message: $message"
 	fi
 
-	qubuf=()
-	ranked_workers=($(echo -n ${!state[@]} ${assign[@]} | xargs -r -d' ' -L1 | \
-	           sort | uniq -c | sort -h | xargs -r -L1 | cut -d' ' -f2))
-	for id in ${queue[@]}; do
-		pref=${prefer[$id]:-"*"}
-		for worker in ${ranked_workers[@]}; do
-			if [ "${state[$worker]}" == "idle" ] && [[ $worker == $pref ]]; then
-				echo "$worker << request $id {${cmd[$id]}}"
-				log "assign request $id to $worker"
-				state[$worker]="hold"
-				assign[$id]=$worker
-				queue=(${queue[@]:1})
-				unset id
-				break
-			fi
+	if (( ${#queue[@]} )); then
+		sort_by_occurrence() { sort | uniq -c | sort -h | xargs -r -L1 | cut -d' ' -f2; }
+		ranking=($(echo -n ${!state[@]} ${assign[@]} | xargs -r -d' ' -L1 | sort_by_occurrence))
+		for id in ${queue[@]}; do
+			pref=${prefer[$id]:-"*"}
+			for worker in ${ranking[@]}; do
+				if [ "${state[$worker]}" == "idle" ] && [[ $worker == $pref ]]; then
+					echo "$worker << request $id {${cmd[$id]}}"
+					log "assign request $id to $worker"
+					state[$worker]="hold"
+					assign[$id]=$worker
+					queue=" ${queue[@]} "
+					queue=(${queue/ $id / })
+					break
+				fi
+			done
 		done
-		qubuf+=($id)
-	done
-	queue=(${qubuf[@]})
+	fi
 done
 
 log "message input is terminated, chat system is down?"
