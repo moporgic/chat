@@ -263,7 +263,7 @@ while input message; do
 		elif [[ "$command $options" =~ $regex_unset ]]; then
 			var=${BASH_REMATCH[1]}
 			regex_forbidden_unset="^(broker|worker|state)$"
-			if [ "$var" ] && [[ $var =~ $regex_forbidden_unset ]]; then
+			if [ "$var" ] && ! [[ $var =~ $regex_forbidden_unset ]]; then
 				echo "$name << accept unset $var"
 				unset $var
 				log "accept unset $var from $name"
