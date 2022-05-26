@@ -4,7 +4,7 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 broker=${broker:-broker}
 worker=${worker:-worker-1}
 max_num_jobs=${max_num_jobs:-$(nproc)}
-state_file=${state_file}
+observe_state=${observe_state:-observe_state.sh}
 
 stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
 logfile=${logfile:-$(mktemp --suffix .log $(basename -s .sh "$0")-$stamp.XXXX)}
@@ -64,12 +64,12 @@ execute() {
 
 observe_state() {
 	current_state=$state
-	if (( ${#cmd[@]} >= ${max_num_jobs:-1} )); then
-		state=busy
-	elif [ "$state_file" ] && [ "$(grep -Eo '(idle|busy)' $state_file 2>/dev/null | tail -n1)" == "busy" ]; then
-		state=busy
-	else
-		state=idle
+	unset state
+	if [ -e "$observe_state" ]; then
+		state=$(bash "$observe_state" $worker ${#cmd[@]} 2>/dev/null)
+	fi
+	if ! [[ $state =~ ^idle|busy$ ]]; then
+		(( ${#cmd[@]} >= ${max_num_jobs:-$(nproc)} )) && state=busy || state=idle
 	fi
 	[ "$state" != "$current_state" ]
 	return $?
@@ -129,7 +129,6 @@ while input message; do
 			echo "$requester << reject request $id"
 			log "reject request $id {$command} from $requester due to busy state"
 		fi
-		[ "$state_file" ] && sleep 0.5
 		observe_state; notify_state
 
 	elif [[ $message =~ $regex_confirm_response ]]; then
@@ -140,7 +139,6 @@ while input message; do
 			if [ "${own[$id]}" == "$who" ]; then
 				unset own[$id] cmd[$id] pid[$id]
 				log "confirm that $who ${confirm}ed response $id"
-				[ "$state_file" ] && sleep 0.5
 				observe_state; notify_state
 			else
 				log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
@@ -185,7 +183,6 @@ while input message; do
 					log "request $id {${cmd[$id]}} with pid ${pid[$id]} has been terminated successfully"
 				fi
 				unset own[$id] cmd[$id] pid[$id]
-				[ "$state_file" ] && sleep 0.5
 				observe_state; notify_state
 			else
 				echo "$who << reject terminate $id"
@@ -254,7 +251,7 @@ while input message; do
 			elif [ "$var" == "worker" ]; then
 				log "worker name has been changed, register $worker on the chat system..."
 				echo "name ${worker:=worker-1}"
-			elif [ "$var" == "max_num_jobs" ] || [ "$var" == "state_file" ]; then
+			elif [ "$var" == "max_num_jobs" ]; then
 				observe_state; notify_state
 			elif [ "$var" == "state" ]; then
 				notify_state
@@ -293,7 +290,7 @@ while input message; do
 			echo "$name << confirm restart"
 			log "accept operate restart from $name"
 			log "$worker is restarting..."
-			exec $0 $(list_args "$@" broker worker max_num_jobs state_file stamp logfile)
+			exec $0 $(list_args "$@" broker worker max_num_jobs observe_state stamp logfile)
 
 		elif [ "$command $options" == "query envinfo" ]; then
 			if [ -e envinfo.sh ]; then
