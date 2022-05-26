@@ -12,7 +12,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
 if [[ $1 != NC=* ]]; then
-	log "worker version 2022-05-25 (protocol 0)"
+	log "worker version 2022-05-26 (protocol 0)"
 	log "options: $@"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
@@ -56,8 +56,8 @@ execute() {
 	output=$(eval "${cmd[$id]}" 2>&1)
 	code=$?
 	# drop ASCII terminal color codes then escape '\' '\n' '\t' with '\'
-	output="$(<<< $output sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
-	          sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]')"
+	output=$(echo -n "$output" | sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
+	         sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]')
 	log "complete response $id $code {$output} and forward it to ${own[$id]}"
 	echo "${own[$id]} << response $id $code {$output}"
 }
