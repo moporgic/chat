@@ -12,7 +12,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
 if [[ $1 != NC=* ]]; then
-	log "broker version 2022-05-26 (protocol 0)"
+	log "broker version 2022-05-27 (protocol 0)"
 	log "options: $@"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
@@ -334,7 +334,7 @@ while input message; do
 				echo "$name << queue = (${queue[@]})"
 				log "accept query queue from $name, queue = (${queue[@]})"
 
-			elif [[ "$options" =~ ^(state|worker)s?$ ]]; then
+			elif [[ "$options" =~ ^(state)s?$ ]]; then
 				status=()
 				for worker in ${!state[@]}; do
 					status+=("[$worker]=${state[$worker]}")
@@ -342,29 +342,67 @@ while input message; do
 				echo "$name << state = (${status[@]})"
 				log "accept query state from $name, state = (${status[@]})"
 
-			elif [[ "$options" =~ ^(request|job)s?(.*)$ ]] ; then
-				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
-				echo "$name << jobs = (${ids[@]})"
-				for id in ${ids[@]}; do
-					echo "$name << # request $(printf %${#ids[-1]}d $id) ${own[$id]} {${cmd[$id]}}"
-				done
-				log "accept query jobs from $name, jobs = (${ids[@]})"
-
-			elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
-				ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
-				echo "$name << results = (${ids[@]})"
-				for id in ${ids[@]}; do
-					echo "$name << # response $(printf %${#ids[-1]}d $id) ${res[$id]%%:*} {${res[$id]#*:}}"
-				done
-				log "accept query results from $name, results = (${ids[@]})"
-
-			elif [[ "$options" =~ ^(assign(ment)?|task)s?$ ]]; then
+			elif [[ "$options" =~ ^(assign(ment)?)s?$ ]]; then
 				assignment=()
 				for id in ${!assign[@]}; do
-					assignment+=("[$id]=${assign[$id]}")
+					[ "${own[$id]}" == "$name" ] && assignment+=("[$id]=${assign[$id]}")
 				done
 				echo "$name << assign = (${assignment[@]})"
 				log "accept query assign from $name, assign = (${assignment[@]})"
+
+			elif [[ "$options" =~ ^(worker)s?(.*)$ ]]; then
+				workerx=(${BASH_REMATCH[2]:-$(<<< ${!state[@]} xargs -r printf "%s\n" | sort)})
+				workerx=($(for worker in ${workerx[@]}; do [[ -v state[$worker] ]] && echo $worker; done))
+				echo "$name << workers = (${workerx[@]})"
+				for worker in ${workerx[@]}; do
+					num_assign=0
+					for id in ${!assign[@]}; do
+						[ "${assign[$id]}" == "$worker" ] && num_assign=$((num_assign+1))
+					done
+					echo "$name << # $worker ${state[$worker]} $num_assign assigned"
+				done
+				log "accept query workers from $name, workers = (${workerx[@]})"
+
+			elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
+				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+				ids=($(for id in ${ids[@]}; do [[ -v cmd[$id] ]] && echo $id; done))
+				echo "$name << jobs = (${ids[@]})"
+				for id in ${ids[@]}; do
+					if [[ -v res[$id] ]]; then
+						echo "$name << # $id {${cmd[$id]}} [${own[$id]}] = ${res[$id]%%:*} {${res[$id]#*:}}"
+					elif [[ -v assign[$id] ]]; then
+						echo "$name << # $id {${cmd[$id]}} [${own[$id]}] @ ${assign[$id]}"
+					else
+						rank=0
+						while ! [ ${queue[$((rank++))]:-$id} == $id ]; do :; done
+						echo "$name << # $id {${cmd[$id]}} [${own[$id]}] @ #$rank"
+					fi
+				done
+				log "accept query jobs from $name, jobs = (${ids[@]})"
+
+			elif [[ "$options" =~ ^(request)s?(.*)$ ]] ; then
+				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+				ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$name" ] && ! [[ -v res[$id] ]] && echo $id; done))
+				echo "$name << requests = (${ids[@]})"
+				for id in ${ids[@]}; do
+					if [[ -v assign[$id] ]]; then
+						echo "$name << # request $id {${cmd[$id]}} @ ${assign[$id]}"
+					else
+						rank=0
+						while ! [ ${queue[$((rank++))]:-$id} == $id ]; do :; done
+						echo "$name << # request $id {${cmd[$id]}} @ #$rank"
+					fi
+				done
+				log "accept query requests from $name, requests = (${ids[@]})"
+
+			elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
+				ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
+				ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$name" ] && [[ -v res[$id] ]] && echo $id; done))
+				echo "$name << responses = (${ids[@]})"
+				for id in ${ids[@]}; do
+					echo "$name << # response $id ${res[$id]%%:*} {${res[$id]#*:}}"
+				done
+				log "accept query responses from $name, responses = (${ids[@]})"
 
 			elif [ "$options" == "envinfo" ]; then
 				if [ -e envinfo.sh ]; then

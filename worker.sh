@@ -12,7 +12,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
 if [[ $1 != NC=* ]]; then
-	log "worker version 2022-05-26 (protocol 0)"
+	log "worker version 2022-05-27 (protocol 0)"
 	log "options: $@"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
@@ -240,13 +240,23 @@ while input message; do
 				log "accept query state from $name"
 				notify_state $name
 
-			elif [[ "$options" =~ ^(request|job)s?(.*)$ ]] ; then
+			elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+				ids=($(for id in ${ids[@]}; do [[ -v cmd[$id] ]] && echo $id; done))
 				echo "$name << jobs = (${ids[@]})"
 				for id in ${ids[@]}; do
-					echo "$name << # request $(printf %${#ids[-1]}d $id) ${own[$id]} {${cmd[$id]}}"
+					echo "$name << # request $id {${cmd[$id]}} [${own[$id]}]"
 				done
 				log "accept query jobs from $name, jobs = (${ids[@]})"
+
+			elif [[ "$options" =~ ^(request|assign)s?(.*)$ ]] ; then
+				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+				ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$name" ] && [[ -v cmd[$id] ]] && echo $id; done))
+				echo "$name << requests = (${ids[@]})"
+				for id in ${ids[@]}; do
+					echo "$name << # request $id {${cmd[$id]}}"
+				done
+				log "accept query requests from $name, requests = (${ids[@]})"
 
 			elif [ "$options" == "envinfo" ]; then
 				if [ -e envinfo.sh ]; then
