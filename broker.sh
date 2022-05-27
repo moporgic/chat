@@ -3,7 +3,6 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
 capacity=${capacity:-65536}
-capacity_queue=${capacity_queue:-2048}
 load_balance=${load_balance}
 timeout=${timeout:-0}
 prefer_worker=${prefer_worker}
@@ -122,7 +121,7 @@ while input message; do
 		id=${BASH_REMATCH[4]:-${id_next:-1}}; id_next=$((id+1))
 		command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
 		options=${BASH_REMATCH[7]}
-		if (( ${#cmd[@]} < ${capacity:-65536} )) && (( ${#queue[@]} < ${capacity_queue:-2048} )); then
+		if (( ${#cmd[@]} < ${capacity:-65536} )); then
 			if ! [[ -v own[$id] ]]; then
 				own[$id]=$requester
 				cmd[$id]=$command
@@ -376,11 +375,10 @@ while input message; do
 
 			elif [ "$options" == "capacity" ]; then
 				echo "$name << capacity = $capacity"
-				echo "$name << capacity_queue = $capacity_queue"
 				observe_worker_capacity
 				echo "$name << worker_capacity = ${worker_capacity[@]}"
 				log "accept query capacity from $name, capacity = $capacity,"
-				    "capacity_queue = $capacity_queue, worker_capacity = ($(list_omit ${worker_capacity[@]}))"
+				    "worker_capacity = ($(list_omit ${worker_capacity[@]}))"
 
 			elif [ "$options" == "queue" ]; then
 				echo "$name << queue = (${queue[@]})"
