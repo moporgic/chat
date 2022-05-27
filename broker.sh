@@ -487,23 +487,33 @@ while input message; do
 			fi
 
 		elif [ "$command" == "subscribe" ]; then
-			item=$options
-			notify[$item]=$(printf "%s\n" ${notify[$item]} $name | sort | uniq)
-			news[$item-$name]=subscribe
-			echo "$name << accept $command $options"
-			log "accept $command $options from $name"
-			for worker in ${!state[@]}; do
-				if [ "${state[$worker]%:*}" == "$item" ]; then
-					echo "$name << notify $worker state $item"
-				fi
-			done
+			if [[ $options =~ ^(idle|busy|assign)$ ]]; then
+				item=$options
+				notify[$item]=$(printf "%s\n" ${notify[$item]} $name | sort | uniq)
+				news[$item-$name]=subscribe
+				echo "$name << accept $command $options"
+				log "accept $command $options from $name"
+				for worker in ${!state[@]}; do
+					if [ "${state[$worker]%:*}" == "$item" ]; then
+						echo "$name << notify $worker state $item"
+					fi
+				done
+			else
+				echo "$name << reject $command $options"
+				log "reject $command $options from $name, unsupported subscription"
+			fi
 
 		elif [ "$command" == "unsubscribe" ]; then
-			item=$options
-			notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${name}$/d")
-			unset news[$item-$name]
-			echo "$name << accept $command $options"
-			log "accept $command $options from $name"
+			if [[ $options =~ ^(idle|busy|assign)$ ]]; then
+				item=$options
+				notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${name}$/d")
+				unset news[$item-$name]
+				echo "$name << accept $command $options"
+				log "accept $command $options from $name"
+			else
+				echo "$name << reject $command $options"
+				log "reject $command $options from $name, unsupported subscription"
+			fi
 
 		elif [ "$command" == "set" ]; then
 			var=(${options/=/ }); var=${var[0]}
