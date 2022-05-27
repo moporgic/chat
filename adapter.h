@@ -95,7 +95,7 @@ protected:
 
 public:
 
-	void connect(const std::string& host, int port, time_t timeout = 10000);
+	bool connect(const std::string& host, int port, time_t timeout = 10000);
 
 	void disconnect();
 

@@ -314,8 +314,8 @@ std::list<std::string> broker_adapter::list_subscribed_items() const {
 	return {"idle", "assign"};
 }
 
-void broker_adapter::connect(const std::string& host, int port, time_t timeout) {
-	if (thread_) return;
+bool broker_adapter::connect(const std::string& host, int port, time_t timeout) {
+	if (thread_) return true;
 
 	async_connect(host, port);
 	std::unique_lock lock(wait_cv_mutex_);
@@ -323,12 +323,14 @@ void broker_adapter::connect(const std::string& host, int port, time_t timeout) 
 		_log << "wait for the connection with at most " << timeout << "ms" << std::endl;
 		auto until = std::chrono::system_clock::now() + std::chrono::milliseconds(timeout);
 		if (wait_cv_.wait_until(lock, until, []{ return true; }))
-			return;
+			return true;
 		_log << "connection timed out" << std::endl;
 		handle_handshake_error("timeout");
+		return false;
 	} else {
 		_log << "wait for the connection" << std::endl;
 		wait_cv_.wait(lock, []{ return true; });
+		return true;
 	}
 }
 
