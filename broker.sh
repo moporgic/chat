@@ -77,6 +77,21 @@ list_omit() {
 	fi
 }
 
+observe_worker_capacity() {
+	current_worker_capacity_=${worker_capacity[@]}
+	unset worker_capacity worker_capacity_details
+	for worker in ${!state[@]}; do
+		w_stat=${state[$worker]#*:}
+		w_capacity=${w_stat#*/}
+		worker_capacity=$((worker_capacity+w_capacity))
+		worker_capacity_details+=("[$worker]=$w_capacity")
+	done
+	worker_capacity+=("${worker_capacity_details[@]}")
+	worker_capacity_=${worker_capacity[@]}
+	[ "$worker_capacity_" != "$current_worker_capacity_" ]
+	return $?
+}
+
 erase_from() {
 	list=${1:?}[@]
 	value=${2:?}
@@ -170,10 +185,15 @@ while input message; do
 			for subscriber in ${notify[$stat]}; do
 				echo "$subscriber << notify $worker state $stat"
 			done
-			subscribers=(${notify[$stat]})
-			log "state has been changed, notify ${subscribers[@]}"
+			log "state has been changed, notify ${notify[$stat]}"
 		fi
 		state[$worker]=$stat:$load
+		if (( ${#notify[capacity]} )) && observe_worker_capacity; then
+			for subscriber in ${notify[capacity]}; do
+				echo "$subscriber << notify capacity ${worker_capacity[@]}"
+			done
+			log "capacity has been changed, notify ${notify[capacity]}"
+		fi
 
 	elif [[ $message =~ $regex_confirm ]]; then
 		name=${BASH_REMATCH[1]}
@@ -258,6 +278,12 @@ while input message; do
 							log "revoke assigned request $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
 						fi
 					done
+					if (( ${#notify[capacity]} )) && observe_worker_capacity; then
+						for subscriber in ${notify[capacity]}; do
+							echo "$subscriber << notify capacity ${worker_capacity[@]}"
+						done
+						log "capacity has been changed, notify ${notify[capacity]}"
+					fi
 				fi
 				for id in ${!own[@]}; do
 					if [ "${own[$id]}" == "$name" ] && ! [ "${keep_unowned_tasks}" ]; then
@@ -350,7 +376,10 @@ while input message; do
 			elif [ "$options" == "capacity" ]; then
 				echo "$name << capacity = $capacity"
 				echo "$name << capacity_queue = $capacity_queue"
-				log "accept query capacity from $name, capacity = $capacity, capacity_queue = $capacity_queue"
+				observe_worker_capacity
+				echo "$name << worker_capacity = ${worker_capacity[@]}"
+				log "accept query capacity from $name, capacity = $capacity,"
+				    "capacity_queue = $capacity_queue, worker_capacity = ($(list_omit ${worker_capacity[@]}))"
 
 			elif [ "$options" == "queue" ]; then
 				echo "$name << queue = (${queue[@]})"
@@ -487,24 +516,29 @@ while input message; do
 			fi
 
 		elif [ "$command" == "subscribe" ]; then
-			if [[ $options =~ ^(idle|busy|assign)$ ]]; then
+			if [[ $options =~ ^(idle|busy|assign|capacity)$ ]]; then
 				item=$options
 				notify[$item]=$(printf "%s\n" ${notify[$item]} $name | sort | uniq)
 				news[$item-$name]=subscribe
 				echo "$name << accept $command $options"
 				log "accept $command $options from $name"
-				for worker in ${!state[@]}; do
-					if [ "${state[$worker]%:*}" == "$item" ]; then
-						echo "$name << notify $worker state $item"
-					fi
-				done
+				if [ "$item" == "idle" ] || [ "$item" == "busy" ]; then
+					for worker in ${!state[@]}; do
+						if [ "${state[$worker]%:*}" == "$item" ]; then
+							echo "$name << notify $worker state $item"
+						fi
+					done
+				elif [ "$item" == "capacity" ]; then
+					observe_worker_capacity
+					echo "$name << notify capacity ${worker_capacity[@]}"
+				fi
 			else
 				echo "$name << reject $command $options"
 				log "reject $command $options from $name, unsupported subscription"
 			fi
 
 		elif [ "$command" == "unsubscribe" ]; then
-			if [[ $options =~ ^(idle|busy|assign)$ ]]; then
+			if [[ $options =~ ^(idle|busy|assign|capacity)$ ]]; then
 				item=$options
 				notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${name}$/d")
 				unset news[$item-$name]
