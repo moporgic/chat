@@ -77,6 +77,13 @@ list_omit() {
 	fi
 }
 
+erase_from() {
+	list=${1:?}[@]
+	value=${2:?}
+	list=" ${!list} "
+	echo ${list/ $value / }
+}
+
 input() {
 	unset ${1:-message}
 	IFS= read -r -t ${input_timeout:-1} ${1:-message}
@@ -266,8 +273,7 @@ while input message; do
 							echo "${assign[$id]} << terminate $id"
 							log "terminate assigned request $id on ${assign[$id]}"
 						else
-							queue=" ${queue[@]} "
-							queue=(${queue/ $id / })
+							queue=($(erase_from queue $id))
 						fi
 					fi
 				done
@@ -457,8 +463,7 @@ while input message; do
 					log "reject terminate $id from $name since it is owned by ${own[$id]}"
 				fi
 			elif [[ -v cmd[$id] ]]; then
-				queue=" ${queue[@]} "
-				queue=(${queue/ $id / })
+				queue=($(erase_from queue $id))
 				unset cmd[$id] own[$id] tmout[$id] prefer[$id]
 				echo "$name << accept terminate $id"
 				log "accept terminate $id from $name and remove it from queue"
@@ -592,8 +597,7 @@ while input message; do
 					echo "${assign[$id]} << terminate $id"
 					log "terminate assigned request $id on ${assign[$id]}"
 				elif [[ -v own[$id] ]]; then
-					queue=" ${queue[@]} "
-					queue=(${queue/ $id / })
+					queue=($(erase_from queue $id))
 				fi
 				unset assign[$id] tmout[$id]
 				code="timeout"
@@ -626,10 +630,8 @@ while input message; do
 					log "assign request $id to $worker"
 					state[$worker]="hold"
 					assign[$id]=$worker
-					available=" ${available[@]} "
-					available=(${available/ $worker / })
-					queue=" ${queue[@]} "
-					queue=(${queue/ $id / })
+					available=($(erase_from available $worker))
+					queue=($(erase_from queue $id))
 					break
 				fi
 			done
