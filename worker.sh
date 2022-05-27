@@ -3,7 +3,7 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
 worker=${worker:-worker-1}
-max_num_jobs=${max_num_jobs:-$(nproc)}
+capacity=${capacity:-$(nproc)}
 observe_state=${observe_state:-observe_state.sh}
 
 stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
@@ -69,7 +69,7 @@ observe_state() {
 		state=$(bash "$observe_state" $worker ${#cmd[@]} 2>/dev/null)
 	fi
 	if ! [[ $state =~ ^idle|busy$ ]]; then
-		(( ${#cmd[@]} >= ${max_num_jobs:-$(nproc)} )) && state=busy || state=idle
+		(( ${#cmd[@]} >= ${capacity:-$(nproc)} )) && state=busy || state=idle
 	fi
 	[ "$state" != "$current_state" ]
 	return $?
@@ -240,9 +240,9 @@ while input message; do
 				log "accept query state from $name"
 				notify_state $name
 
-			elif [ "$options" == "capacity" ] || [ "$options" == "max_num_jobs" ]; then
-				echo "$name << capacity = $max_num_jobs"
-				log "accept query capacity from $name, capacity = $max_num_jobs"
+			elif [ "$options" == "capacity" ]; then
+				echo "$name << capacity = $capacity"
+				log "accept query capacity from $name, capacity = $capacity"
 
 			elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
@@ -291,7 +291,7 @@ while input message; do
 			elif [ "$var" == "worker" ]; then
 				log "worker name has been changed, register $worker on the chat system..."
 				echo "name ${worker:=worker-1}"
-			elif [ "$var" == "max_num_jobs" ] || [ "$var" == "observe_state" ]; then
+			elif [ "$var" == "capacity" ] || [ "$var" == "observe_state" ]; then
 				observe_state && notify_state
 			elif [ "$var" == "state" ]; then
 				notify_state
@@ -318,7 +318,7 @@ while input message; do
 				echo "$name << confirm restart"
 				log "accept operate restart from $name"
 				log "$worker is restarting..."
-				exec $0 $(list_args "$@" broker worker max_num_jobs observe_state stamp logfile)
+				exec $0 $(list_args "$@" broker worker capacity observe_state stamp logfile)
 
 			else
 				log "ignore $command $options from $name"
