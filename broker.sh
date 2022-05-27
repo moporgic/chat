@@ -2,7 +2,8 @@
 for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
-max_queue_size=${max_queue_size:-65536}
+capacity=${capacity:-65536}
+capacity_queue=${capacity_queue:-2048}
 load_balance=${load_balance}
 timeout=${timeout:-0}
 prefer_worker=${prefer_worker}
@@ -89,7 +90,7 @@ while input message; do
 		id=${BASH_REMATCH[4]:-${id_next:-1}}; id_next=$((id+1))
 		command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
 		options=${BASH_REMATCH[7]}
-		if (( ${#queue[@]} < ${max_queue_size:-65536} )); then
+		if (( ${#cmd[@]} < ${capacity:-65536} )) && (( ${#queue[@]} < ${capacity_queue:-2048} )); then
 			if ! [[ -v own[$id] ]]; then
 				own[$id]=$requester
 				cmd[$id]=$command
@@ -113,7 +114,7 @@ while input message; do
 			fi
 		else
 			echo "$requester << reject request {$command}"
-			log "reject request {$command} from $requester due to full queue, queue = (${queue[@]})"
+			log "reject request {$command} from $requester due to capacity, #cmd = ${#cmd[@]}, queue = (${queue[@]})"
 		fi
 
 	elif [[ $message =~ $regex_response ]]; then
@@ -329,6 +330,11 @@ while input message; do
 			if [ "$options" == "protocol" ]; then
 				echo "$name << protocol 0"
 				log "accept query protocol from $name"
+
+			elif [ "$options" == "capacity" ]; then
+				echo "$name << capacity = $capacity"
+				echo "$name << capacity_queue = $capacity_queue"
+				log "accept query capacity from $name, capacity = $capacity, capacity_queue = $capacity_queue"
 
 			elif [ "$options" == "queue" ]; then
 				echo "$name << queue = (${queue[@]})"
