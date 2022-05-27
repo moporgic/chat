@@ -282,6 +282,7 @@ while input message; do
 		elif [ "$command" == "set" ]; then
 			var=(${options/=/ }); var=${var[0]}
 			val=${options:$((${#var}+1))}
+			set_var+=($var)
 			echo "$name << accept set ${var}${val:+ ${val}}"
 			declare val_old="${!var}" $var="$val"
 			log "accept set ${var}${val:+=\"${val}\"} from $name"
@@ -299,6 +300,7 @@ while input message; do
 
 		elif [ "$command" == "unset" ]; then
 			var=$options
+			set_var+=($var)
 			if [ "$var" ] && ! [[ $var =~ ^(broker|worker|state)$ ]]; then
 				echo "$name << accept unset $var"
 				unset $var
@@ -318,7 +320,7 @@ while input message; do
 				echo "$name << confirm restart"
 				log "accept operate restart from $name"
 				log "$worker is restarting..."
-				exec $0 $(list_args "$@" broker worker capacity observe_state stamp logfile)
+				exec $0 $(list_args "$@" ${set_var[@]} stamp logfile)
 
 			else
 				log "ignore $command $options from $name"
