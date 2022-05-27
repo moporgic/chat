@@ -79,7 +79,6 @@ regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\
 regex_worker_state="^(\S+) >> state (idle|busy)$"
 regex_others="^(\S+) >> (query|terminate|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
 regex_chat_system="^(#|%) (.+)$"
-regex_ignore_silently="^(\S+ >> confirm restart)$"
 
 log "verify chat system protocol 0..."
 echo "protocol 0"
@@ -575,9 +574,6 @@ while input message; do
 				echo "${own[$id]} << response $id $code {$output}"
 			fi
 		done
-
-	elif ! [[ $message =~ $regex_ignore_silently ]]; then
-		log "ignore message: $message"
 	fi
 
 	if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
