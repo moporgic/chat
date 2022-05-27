@@ -80,6 +80,7 @@ list_omit() {
 observe_worker_capacity() {
 	current_worker_capacity_=${worker_capacity[@]}
 	unset worker_capacity worker_capacity_details
+	worker_capacity=0
 	for worker in ${!state[@]}; do
 		w_stat=${state[$worker]#*:}
 		w_capacity=${w_stat#*/}
