@@ -68,6 +68,15 @@ list_args() {
 	unset args
 }
 
+list_omit() {
+	if (( "$#" <= ${max_printable_list_size:-10} )); then
+		echo "$@"
+	else
+		num_show=${num_print_when_omitted:-6}
+		echo "${@:1:$((num_show/2))}" "...[$(($#-num_show))]..." "${@:$#-$((num_show/2-1))}"
+	fi
+}
+
 input() {
 	unset ${1:-message}
 	IFS= read -r -t ${input_timeout:-1} ${1:-message}
@@ -107,14 +116,16 @@ while input message; do
 				fi
 				queue+=($id)
 				echo "$requester << accept request $id {$command}"
-				log "accept request $id {$command} ${with:+with ${with// /,} }from $requester and enqueue $id, queue = (${queue[@]})"
+				log "accept request $id {$command} ${with:+with ${with// /,} }from $requester and" \
+				    "enqueue $id, queue = ($(list_omit ${queue[@]}))"
 			else
 				echo "$requester << reject request $id {$command}"
 				log "reject request $id {$command} from $requester since id $id has been occupied"
 			fi
 		else
 			echo "$requester << reject request {$command}"
-			log "reject request {$command} from $requester due to capacity, #cmd = ${#cmd[@]}, queue = (${queue[@]})"
+			log "reject request {$command} from $requester due to capacity," \
+			    "#cmd = ${#cmd[@]}, queue = ($(list_omit ${queue[@]}))"
 		fi
 
 	elif [[ $message =~ $regex_response ]]; then
@@ -211,7 +222,7 @@ while input message; do
 						unset assign[$id]
 					fi
 					queue=($id ${queue[@]})
-					log "confirm that $name ${confirm}ed $type $id and re-enqueue $id, queue = (${queue[@]})"
+					log "confirm that $name ${confirm}ed $type $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
 				fi
 			done
 		elif [ "$who" ]; then
@@ -238,7 +249,7 @@ while input message; do
 						if [ "${assign[$id]}" == "$name" ]; then
 							unset assign[$id]
 							queue=($id ${queue[@]})
-							log "revoke assigned request $id and re-enqueue $id, queue = (${queue[@]})"
+							log "revoke assigned request $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
 						fi
 					done
 				fi
@@ -338,7 +349,7 @@ while input message; do
 
 			elif [ "$options" == "queue" ]; then
 				echo "$name << queue = (${queue[@]})"
-				log "accept query queue from $name, queue = (${queue[@]})"
+				log "accept query queue from $name, queue = ($(list_omit ${queue[@]}))"
 
 			elif [[ "$options" =~ ^(state)s?$ ]]; then
 				status=()
@@ -346,7 +357,7 @@ while input message; do
 					status+=("[$worker]=${state[$worker]}")
 				done
 				echo "$name << state = (${status[@]})"
-				log "accept query state from $name, state = (${status[@]})"
+				log "accept query state from $name, state = ($(list_omit ${status[@]}))"
 
 			elif [[ "$options" =~ ^(assign(ment)?)s?$ ]]; then
 				assignment=()
@@ -354,7 +365,7 @@ while input message; do
 					[ "${own[$id]}" == "$name" ] && assignment+=("[$id]=${assign[$id]}")
 				done
 				echo "$name << assign = (${assignment[@]})"
-				log "accept query assign from $name, assign = (${assignment[@]})"
+				log "accept query assign from $name, assign = ($(list_omit ${assignment[@]}))"
 
 			elif [[ "$options" =~ ^(worker)s?(.*)$ ]]; then
 				workerx=(${BASH_REMATCH[2]:-$(<<< ${!state[@]} xargs -r printf "%s\n" | sort)})
@@ -367,7 +378,7 @@ while input message; do
 					done
 					echo "$name << # $worker ${state[$worker]} $num_assign assigned"
 				done
-				log "accept query workers from $name, workers = (${workerx[@]})"
+				log "accept query workers from $name, workers = ($(list_omit ${workerx[@]}))"
 
 			elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
@@ -384,7 +395,7 @@ while input message; do
 						echo "$name << # $id {${cmd[$id]}} [${own[$id]}] @ #$rank"
 					fi
 				done
-				log "accept query jobs from $name, jobs = (${ids[@]})"
+				log "accept query jobs from $name, jobs = ($(list_omit ${ids[@]}))"
 
 			elif [[ "$options" =~ ^(request)s?(.*)$ ]] ; then
 				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
@@ -399,7 +410,7 @@ while input message; do
 						echo "$name << # request $id {${cmd[$id]}} @ #$rank"
 					fi
 				done
-				log "accept query requests from $name, requests = (${ids[@]})"
+				log "accept query requests from $name, requests = ($(list_omit ${ids[@]}))"
 
 			elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
 				ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
@@ -408,7 +419,7 @@ while input message; do
 				for id in ${ids[@]}; do
 					echo "$name << # response $id ${res[$id]%%:*} {${res[$id]#*:}}"
 				done
-				log "accept query responses from $name, responses = (${ids[@]})"
+				log "accept query responses from $name, responses = ($(list_omit ${ids[@]}))"
 
 			elif [ "$options" == "envinfo" ]; then
 				if [ -e envinfo.sh ]; then
@@ -567,7 +578,8 @@ while input message; do
 		current=$(date +%s)
 		for id in ${!tmout[@]}; do
 			if (( $current > ${tmout[$id]} )); then
-				log "request $id failed due to timeout (due $(date '+%Y-%m-%d %H:%M:%S' -d @${tmout[$id]})), notify ${own[$id]}"
+				log "request $id failed due to timeout" \
+				    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${tmout[$id]})), notify ${own[$id]}"
 				if [[ -v assign[$id] ]]; then
 					echo "${assign[$id]} << terminate $id"
 					log "terminate assigned request $id on ${assign[$id]}"

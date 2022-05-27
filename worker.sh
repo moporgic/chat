@@ -90,6 +90,15 @@ list_args() {
 	unset args
 }
 
+list_omit() {
+	if (( "$#" <= ${max_printable_list_size:-10} )); then
+		echo "$@"
+	else
+		num_show=${num_print_when_omitted:-6}
+		echo "${@:1:$((num_show/2))}" "...[$(($#-num_show))]..." "${@:$#-$((num_show/2-1))}"
+	fi
+}
+
 input() {
 	unset ${1:-message}
 	IFS= read -r -t ${input_timeout:-1} ${1:-message}
@@ -127,7 +136,7 @@ while input message; do
 			fi
 		else
 			echo "$requester << reject request $id"
-			log "reject request $id {$command} from $requester due to busy state"
+			log "reject request $id {$command} from $requester due to busy state, #cmd = ${#cmd[@]}"
 		fi
 		observe_state; notify_state
 
@@ -251,7 +260,7 @@ while input message; do
 				for id in ${ids[@]}; do
 					echo "$name << # request $id {${cmd[$id]}} [${own[$id]}]"
 				done
-				log "accept query jobs from $name, jobs = (${ids[@]})"
+				log "accept query jobs from $name, jobs = ($(list_omit ${ids[@]}))"
 
 			elif [[ "$options" =~ ^(request|assign)s?(.*)$ ]] ; then
 				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
@@ -260,7 +269,7 @@ while input message; do
 				for id in ${ids[@]}; do
 					echo "$name << # request $id {${cmd[$id]}}"
 				done
-				log "accept query requests from $name, requests = (${ids[@]})"
+				log "accept query requests from $name, requests = ($(list_omit ${ids[@]}))"
 
 			elif [ "$options" == "envinfo" ]; then
 				if [ -e envinfo.sh ]; then
