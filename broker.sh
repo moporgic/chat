@@ -421,6 +421,14 @@ while input message; do
 				done
 				log "accept query responses from $name, responses = ($(list_omit ${ids[@]}))"
 
+			elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
+				opts=($(list_args ${BASH_REMATCH[2]:-"$@" ${set_var[@]} stamp logfile}))
+				vars=()
+				for opt in ${opts[@]}; do vars+=(${opt%%=*}); done
+				echo "$name << options = (${vars[@]})"
+				printf "$name << # %s\n" "${opts[@]}"
+				log "accept query options from $name, options = ($(list_omit ${vars[@]}))"
+
 			elif [ "$options" == "envinfo" ]; then
 				if [ -e envinfo.sh ]; then
 					echo "$name << accept query envinfo"
