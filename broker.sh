@@ -558,7 +558,7 @@ while input message; do
 							fi
 						done
 						log "$broker is restarting..."
-						exec $0 $(list_args "$@" ${set_var[@]} stamp logfile)
+						exec $0 $(list_args "$@" ${set_var[@]} workers stamp logfile)
 					fi
 				fi
 				unset targets
