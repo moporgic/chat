@@ -3,6 +3,7 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
 max_queue_size=${max_queue_size:-65536}
+load_balance=${load_balance}
 timeout=${timeout:-0}
 prefer_worker=${prefer_worker}
 
@@ -531,7 +532,7 @@ while input message; do
 							fi
 						done
 						log "$broker is restarting..."
-						exec $0 $(list_args "$@" broker max_queue_size timeout prefer_worker workers stamp logfile)
+						exec $0 $(list_args "$@" broker max_queue_size load_balance lb_relax_level timeout prefer_worker workers stamp logfile)
 					fi
 				fi
 				unset targets
@@ -579,19 +580,30 @@ while input message; do
 		log "ignore message: $message"
 	fi
 
-	if (( ${#queue[@]} )); then
-		sort_by_occurrence() { sort | uniq -c | sort -h | xargs -r -L1 | cut -d' ' -f2; }
-		ranking=($(echo -n ${!state[@]} ${assign[@]} | xargs -r -d' ' -L1 | sort_by_occurrence | \
-		           while read worker; do [ ${state[$worker]} == "idle" ] && echo $worker; done))
+	if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
+		available=()
+		if ! [ "$load_balance" ]; then
+			for worker in ${!state[@]}; do
+				[ ${state[$worker]} == "idle" ] && available+=($worker)
+			done
+		elif [ "$load_balance" ]; then
+			num_check=0
+			uniq_sort_by_occur() { sort | uniq -c | sort -h | xargs -r -L1 | cut -d' ' -f2; }
+			for worker in $(echo -n ${!state[@]} ${assign[@]} | xargs -r -d' ' -L1 | uniq_sort_by_occur); do
+				[ ${state[$worker]} == "busy" ] && continue
+				(( $((num_check++)) > ${lb_relax_level:-0} )) && break
+				[ ${state[$worker]} == "idle" ] && available+=($worker)
+			done
+		fi
 		for id in ${queue[@]}; do
-			for worker in ${ranking[@]}; do
+			for worker in ${available[@]}; do
 				if [[ $worker == ${prefer[$id]:-*} ]]; then
 					echo "$worker << request $id {${cmd[$id]}}"
 					log "assign request $id to $worker"
 					state[$worker]="hold"
 					assign[$id]=$worker
-					ranking=" ${ranking[@]} "
-					ranking=(${ranking/ $worker / })
+					available=" ${available[@]} "
+					available=(${available/ $worker / })
 					queue=" ${queue[@]} "
 					queue=(${queue/ $id / })
 					break
