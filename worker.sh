@@ -4,7 +4,7 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 broker=${broker:-broker}
 worker=${worker:-worker-1}
 capacity=${capacity:-$(nproc)}
-observe_state=${observe_state:-observe_state.sh}
+observe_capacity=${observe_capacity:-observe_capacity.sh}
 
 stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
 logfile=${logfile:-$(mktemp --suffix .log $(basename -s .sh "$0")-$stamp.XXXX)}
@@ -48,7 +48,7 @@ fi
 declare -A own # [id]=requester
 declare -A cmd # [id]=command
 declare -A pid # [id]=PID
-declare state=init # idle|busy
+declare state=init # (idle|busy #cmd/capacity)
 
 execute() {
 	id=$1
@@ -62,22 +62,27 @@ execute() {
 	echo "${own[$id]} << response $id $code {$output}"
 }
 
+observe_capacity() {
+	if [ -e "$observe_capacity" ]; then
+		bash "$observe_capacity" $worker 2>/dev/null && return
+		log "failed to observe capacity: $observe_capacity return $?"
+	fi
+	nproc
+}
+
 observe_state() {
-	current_state=$state
+	current_state=(${state[@]})
 	unset state
-	if [ -e "$observe_state" ]; then
-		state=$(bash "$observe_state" $worker ${#cmd[@]} 2>/dev/null)
-	fi
-	if ! [[ $state =~ ^idle|busy$ ]]; then
-		(( ${#cmd[@]} >= ${capacity:-$(nproc)} )) && state=busy || state=idle
-	fi
-	[ "$state" != "$current_state" ]
+	current_capacity=${capacity:-$(observe_capacity)}
+	(( ${#cmd[@]} < ${current_capacity:-0} )) && state=idle || state=busy
+	state+=(${#cmd[@]}/${current_capacity:-0})
+	[[ ${state[@]} != ${current_state[@]} ]]
 	return $?
 }
 
 notify_state() {
-	echo "${1:-$broker} << state $state"
-	log "state $state; notify ${1:-$broker}"
+	echo "${1:-$broker} << state ${state[@]}"
+	log "state ${state[@]}; notify ${1:-$broker}"
 }
 
 list_args() {
@@ -107,7 +112,7 @@ input() {
 
 regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
 regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
-regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (\S+)$"
+regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (.+)$"
 regex_terminate="^(\S+) >> terminate (\S+)$"
 regex_others="^(\S+) >> (operate|shell|set|unset|use|query) (.+)$"
 regex_chat_system="^(#|%) (.+)$"
@@ -163,8 +168,8 @@ while input message; do
 		option=${BASH_REMATCH[4]}
 
 		if [ "$who $confirm $what" == "$broker confirm state" ]; then
-			state=$option
-			log "$broker confirmed state $state"
+			state=($option)
+			log "$broker confirmed state ${state[@]}"
 
 		elif [ "$who $what" == "$broker protocol" ]; then
 			if [ "$confirm" == "accept" ]; then
@@ -250,8 +255,14 @@ while input message; do
 				notify_state $name
 
 			elif [ "$options" == "capacity" ]; then
-				echo "$name << capacity = $capacity"
-				log "accept query capacity from $name, capacity = $capacity"
+				current_capacity=${capacity:-$(observe_capacity)}
+				echo "$name << capacity = ${current_capacity:-0}"
+				log "accept query capacity from $name, capacity = ${current_capacity:-0}"
+
+			elif [ "$options" == "loading" ]; then
+				current_capacity=${capacity:-$(observe_capacity)}
+				echo "$name << loading = ${#cmd[@]}/${current_capacity:-0}"
+				log "accept query loading from $name, loading = ${#cmd[@]}/${current_capacity:-0}"
 
 			elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 				ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
@@ -309,7 +320,7 @@ while input message; do
 			elif [ "$var" == "worker" ]; then
 				log "worker name has been changed, register $worker on the chat system..."
 				echo "name ${worker:=worker-1}"
-			elif [ "$var" == "capacity" ] || [ "$var" == "observe_state" ]; then
+			elif [ "$var" == "capacity" ] || [ "$var" == "observe_capacity" ]; then
 				observe_state && notify_state
 			elif [ "$var" == "state" ]; then
 				notify_state

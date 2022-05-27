@@ -53,7 +53,7 @@ declare -A res # [id]=code:output
 declare -A assign # [id]=worker
 declare -A prefer # [id]=worker
 declare -A tmout # [id]=timeout
-declare -A state # [worker]=idle|hold|busy
+declare -A state # [worker]=stat:load
 declare -A news # [type-who]=subscribe
 declare -A notify # [type]=subscriber...
 declare -a queue # id...
@@ -93,7 +93,7 @@ input() {
 regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
 regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
 regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
-regex_worker_state="^(\S+) >> state (idle|busy)$"
+regex_worker_state="^(\S+) >> state (idle|busy) (\S+/\S+)$"
 regex_others="^(\S+) >> (query|terminate|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
 regex_chat_system="^(#|%) (.+)$"
 
@@ -162,19 +162,18 @@ while input message; do
 
 	elif [[ $message =~ $regex_worker_state ]]; then
 		worker=${BASH_REMATCH[1]}
-		status=${BASH_REMATCH[2]}
-		echo "$worker << confirm state $status"
-		log "confirm that $worker state $status"
-		if [ "${state[$worker]}" != "$status" ]; then
-			state[$worker]=$status
-			if (( ${#notify[$status]} )); then
-				for subscriber in ${notify[$status]}; do
-					echo "$subscriber << notify $worker state $status"
-				done
-				subscribers=(${notify[$status]})
-				log "state has been changed, notify ${subscribers[@]}"
-			fi
+		stat=${BASH_REMATCH[2]}
+		load=${BASH_REMATCH[3]}
+		echo "$worker << confirm state $stat $load"
+		log "confirm that $worker state $stat $load"
+		if [ "${state[$worker]%:*}" != "$stat" ] && (( ${#notify[$stat]} )); then
+			for subscriber in ${notify[$stat]}; do
+				echo "$subscriber << notify $worker state $stat"
+			done
+			subscribers=(${notify[$stat]})
+			log "state has been changed, notify ${subscribers[@]}"
 		fi
+		state[$worker]=$stat:$load
 
 	elif [[ $message =~ $regex_confirm ]]; then
 		name=${BASH_REMATCH[1]}
@@ -329,7 +328,7 @@ while input message; do
 					for worker in ${workers//:/ }; do
 						echo "$worker << query state"
 					done
-					log "query states from ${workers//:/, }..."
+					log "query states from ${workers//:/ }"
 					unset workers
 				fi
 			elif [[ "$message" == "failed name"* ]]; then
@@ -494,7 +493,7 @@ while input message; do
 			echo "$name << accept $command $options"
 			log "accept $command $options from $name"
 			for worker in ${!state[@]}; do
-				if [ "${state[$worker]}" == "$item" ]; then
+				if [ "${state[$worker]%:*}" == "$item" ]; then
 					echo "$name << notify $worker state $item"
 				fi
 			done
@@ -612,15 +611,15 @@ while input message; do
 		available=()
 		if ! [ "$load_balance" ]; then
 			for worker in ${!state[@]}; do
-				[ ${state[$worker]} == "idle" ] && available+=($worker)
+				[ ${state[$worker]%:*} == "idle" ] && available+=($worker)
 			done
 		elif [ "$load_balance" ]; then
 			num_check=0
 			uniq_sort_by_occur() { sort | uniq -c | sort -h | xargs -r -L1 | cut -d' ' -f2; }
 			for worker in $(echo -n ${!state[@]} ${assign[@]} | xargs -r -d' ' -L1 | uniq_sort_by_occur); do
-				[ ${state[$worker]} == "busy" ] && continue
+				[ ${state[$worker]%:*} == "busy" ] && continue
 				(( $((num_check++)) > ${lb_relax_level:-0} )) && break
-				[ ${state[$worker]} == "idle" ] && available+=($worker)
+				[ ${state[$worker]%:*} == "idle" ] && available+=($worker)
 			done
 		fi
 		for id in ${queue[@]}; do
@@ -628,7 +627,7 @@ while input message; do
 				if [[ $worker == ${prefer[$id]:-*} ]]; then
 					echo "$worker << request $id {${cmd[$id]}}"
 					log "assign request $id to $worker"
-					state[$worker]="hold"
+					state[$worker]="hold":${state[$worker]#*:}
 					assign[$id]=$worker
 					available=($(erase_from available $worker))
 					queue=($(erase_from queue $id))
