@@ -71,12 +71,13 @@ observe_capacity() {
 }
 
 observe_state() {
-	current_state=(${state[@]})
+	current_state_=${state[@]}
 	unset state
 	current_capacity=${capacity:-$(observe_capacity)}
 	(( ${#cmd[@]} < ${current_capacity:-0} )) && state=idle || state=busy
 	state+=(${#cmd[@]}/${current_capacity:-0})
-	[[ ${state[@]} != ${current_state[@]} ]]
+	state_=${state[@]}
+	[ "$state_" != "$current_state_" ]
 	return $?
 }
 
