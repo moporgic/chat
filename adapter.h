@@ -75,6 +75,8 @@ protected:
 
 	virtual void on_busy_worker(const std::string& worker) {}
 
+	virtual void on_capacity_changed(size_t capacity, const std::string& details) {}
+
 protected:
 
 	virtual void handle_input(const std::string& input);

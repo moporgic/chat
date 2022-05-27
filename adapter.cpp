@@ -139,6 +139,7 @@ std::regex _regex_confirm_request("^(accept|reject) request ([0-9]+ )?\\{(.+)\\}
 std::regex _regex_response("^response ([0-9]+) (.+) \\{(.*)\\}$");
 std::regex _regex_notify_assign("^notify assign request ([0-9]+) to (\\S+)$");
 std::regex _regex_notify_state("^notify (\\S+) state (idle|busy)$");
+std::regex _regex_notify_capacity("^notify capacity ([0-9]+) ?(.*)$");
 std::regex _regex_confirm_protocol("^(accept|reject) protocol (.+)$");
 
 void broker_adapter::handle_input(const std::string& input) {
@@ -236,6 +237,12 @@ void broker_adapter::handle_input(const std::string& input) {
 					_log << boost::format("ignore the confirmation of nonexistent request %llu assigned to worker %s") % id % worker << std::endl;
 				}
 
+			} else if (regex_match(message, match, _regex_notify_capacity)) {
+				size_t capacity = std::stoull(match[1].str());
+				std::string details = match[2].str();
+				on_capacity_changed(capacity, details);
+				_log << boost::format("confirm capacity %llu with '%s'") % capacity % details << std::endl;
+
 			} else if (regex_match(message, match, _regex_confirm_protocol)) {
 				bool accepted = (match[1].str() == "accept");
 				if (accepted) {
@@ -311,7 +318,7 @@ std::string broker_adapter::stringify_request(const std::string& command, const 
 }
 
 std::list<std::string> broker_adapter::list_subscribed_items() const {
-	return {"idle", "assign"};
+	return {"idle", "assign", "capacity"};
 }
 
 bool broker_adapter::connect(const std::string& host, int port, time_t timeout) {
