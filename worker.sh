@@ -6,8 +6,8 @@ worker=${worker:-worker-1}
 capacity=${capacity-$(nproc)}
 observe_capacity=${observe_capacity-observe_capacity.sh}
 
-stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
-logfile=${logfile:-$(mktemp --suffix .log $(basename -s .sh "$0")-$stamp.XXXX)}
+session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
+logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
@@ -28,7 +28,7 @@ if [[ $1 != NC=* ]]; then
 			coproc NC { $nc $addr $port; }
 			sleep ${wait_for_conn:-1}
 			if ps -p $NC_PID >/dev/null 2>&1; then
-				$0 NC=$1 "${@:2}" stamp=$stamp logfile=$logfile <&${NC[0]} >&${NC[1]}
+				$0 NC=$1 "${@:2}" session=$session logfile=$logfile <&${NC[0]} >&${NC[1]}
 				kill $NC_PID >/dev/null 2>&1
 				tail -n2 $logfile | grep -q "shutdown" && exit 0
 				code=0; wait_for_conn=1
@@ -223,7 +223,7 @@ run_worker_main() {
 					log "accept query requests from $name, requests = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
-					opts=($(list_args ${BASH_REMATCH[2]:-"$@" ${set_var[@]} stamp logfile}))
+					opts=($(list_args ${BASH_REMATCH[2]:-"$@" ${set_var[@]} session logfile}))
 					vars=()
 					for opt in ${opts[@]}; do vars+=(${opt%%=*}); done
 					echo "$name << options = (${vars[@]})"
@@ -288,7 +288,7 @@ run_worker_main() {
 					echo "$name << confirm restart"
 					log "accept operate restart from $name"
 					log "$worker is restarting..."
-					exec $0 $(list_args "$@" ${set_var[@]} stamp logfile)
+					exec $0 $(list_args "$@" ${set_var[@]} session logfile)
 
 				else
 					log "ignore $command $options from $name"
