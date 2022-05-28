@@ -3,7 +3,6 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
 capacity=${capacity:-65536}
-load_balance=${load_balance}
 timeout=${timeout:-0}
 prefer_worker=${prefer_worker}
 
@@ -13,7 +12,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
 if [[ $1 != NC=* ]]; then
-	log "broker version 2022-05-27 (protocol 0)"
+	log "broker version 2022-05-28 (protocol 0)"
 	log "options: $@"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
@@ -651,33 +650,49 @@ while input message; do
 	fi
 
 	if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
-		available=()
-		if ! [ "$load_balance" ]; then
-			for worker in ${!state[@]}; do
-				[ ${state[$worker]%:*} == "idle" ] && available+=($worker)
-			done
-		elif [ "$load_balance" ]; then
-			num_check=0
-			uniq_sort_by_occur() { sort | uniq -c | sort -h | xargs -r -L1 | cut -d' ' -f2; }
-			for worker in $(echo -n ${!state[@]} ${assign[@]} | xargs -r -d' ' -L1 | uniq_sort_by_occur); do
-				[ ${state[$worker]%:*} == "busy" ] && continue
-				(( $((num_check++)) > ${lb_relax_level:-0} )) && break
-				[ ${state[$worker]%:*} == "idle" ] && available+=($worker)
-			done
-		fi
+		declare -A workers_for cost_for
+
+		extract_anchor_cost() {
+			src=(${@:-'?'})
+			src=(${src[${load_balance_relax:-0}]} ${src[-1]})
+			cost=${state[$src]%/*}; cost=${cost:5}
+			echo ${cost:--1}
+		}
+
+		workers_for["*"]=$(for worker in ${!state[@]}; do
+			stat=${state[$worker]%/*}
+			[ ${stat:0:4} != "busy" ] && echo $worker:$stat
+		done | sort -t':' -k3n -k2r | cut -d':' -f1)
+		cost_for["*"]=$(extract_anchor_cost ${workers_for["*"]})
+
 		for id in ${queue[@]}; do
-			for worker in ${available[@]}; do
-				if [[ $worker == ${prefer[$id]:-*} ]]; then
-					echo "$worker << request $id {${cmd[$id]}}"
-					log "assign request $id to $worker"
-					state[$worker]="hold":${state[$worker]#*:}
-					assign[$id]=$worker
-					available=($(erase_from available $worker))
-					queue=($(erase_from queue $id))
-					break
-				fi
+			pref=${prefer[$id]:-"*"}
+			if ! [[ -v workers_for[$pref] ]]; then
+				workers_for[$pref]=$(for worker in ${workers_for["*"]}; do
+					[[ $worker == $pref ]] && echo $worker
+				done)
+				cost_for[$pref]=$(extract_anchor_cost ${workers_for[$pref]})
+			fi
+			workers_pref=(${workers_for[$pref]})
+			max_cost=${cost_for[$pref]:--1}
+
+			for worker in ${workers_pref}; do
+				stat=${state[$worker]%/*}
+				(( ${stat:5} > $max_cost )) && break
+				[ ${stat:0:4} != "idle" ] && continue
+
+				echo "$worker << request $id {${cmd[$id]}}"
+				log "assign request $id to $worker"
+				state[$worker]="hold":${state[$worker]:5}
+				assign[$id]=$worker
+				queue=($(erase_from queue $id))
+				unset id; break
 			done
+
+			[[ -v id ]] && workers_for[$pref]=
 		done
+
+		unset workers_for cost_for
 	fi
 done
 
