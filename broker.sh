@@ -1,4 +1,5 @@
 #!/bin/bash
+cd $(dirname -- "${BASH_SOURCE[0]:-$0}")
 for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
