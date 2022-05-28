@@ -51,6 +51,7 @@ declare -A res # [id]=code:output
 declare -A assign # [id]=worker
 declare -A prefer # [id]=worker
 declare -A tmout # [id]=timeout
+declare -A tmdue # [id]=due
 declare -A state # [worker]=stat:load
 declare -A news # [type-who]=subscribe
 declare -A notify # [type]=subscriber...
@@ -128,7 +129,8 @@ while input message; do
 				[[ $options =~ timeout=([0-9]+) ]] && tmz=${BASH_REMATCH[1]} || tmz=$timeout
 				[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]} || pfz=$prefer_worker
 				if (( $tmz )); then
-					tmout[$id]=$(($(date +%s)+$tmz))
+					tmout[$id]=$tmz
+					tmdue[$id]=$(($(date +%s)+$tmz))
 					with+=${with:+ }timeout=$tmz
 				fi
 				if [[ $pfz ]]; then
@@ -156,7 +158,7 @@ while input message; do
 		output=${BASH_REMATCH[4]}
 
 		if [ "${assign[$id]}" == "$worker" ]; then
-			unset assign[$id] tmout[$id]
+			unset assign[$id] tmdue[$id]
 			echo "$worker << accept response $id"
 			if [[ -v cmd[$id] ]]; then
 				res[$id]=$code:$output
@@ -239,15 +241,19 @@ while input message; do
 							log "assigned request $id to $name, notify ${own[$id]}"
 						fi
 					elif [ "$type" == "response" ] || [ "$type" == "terminate" ]; then
-						unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id] assign[$id]
+						unset cmd[$id] own[$id] res[$id] tmdue[$id] tmout[$id] prefer[$id] assign[$id]
 					fi
 
 				elif [ "$confirm" == "reject" ]; then
 					if [ "$type" == "request" ]; then
 						unset assign[$id]
+					elif [ "$type" == "response" ]; then
+						[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s)+${tmout[$id]}))
 					fi
-					queue=($id ${queue[@]})
-					log "confirm that $name ${confirm}ed $type $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
+					if [ "$type" != "terminate" ]; then
+						queue=($id ${queue[@]})
+						log "confirm that $name ${confirm}ed $type $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
+					fi
 				fi
 			done
 		elif [ "$who" ]; then
@@ -286,7 +292,7 @@ while input message; do
 				fi
 				for id in ${!own[@]}; do
 					if [ "${own[$id]}" == "$name" ] && ! [ "${keep_unowned_tasks}" ]; then
-						unset cmd[$id] own[$id] tmout[$id] prefer[$id]
+						unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id]
 						if [[ -v res[$id] ]]; then
 							unset res[$id]
 							log "discard request $id and response $id"
@@ -490,7 +496,7 @@ while input message; do
 				fi
 			elif [[ -v cmd[$id] ]]; then
 				queue=($(erase_from queue $id))
-				unset cmd[$id] own[$id] tmout[$id] prefer[$id]
+				unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id]
 				echo "$name << accept terminate $id"
 				log "accept terminate $id from $name and remove it from queue"
 			else
@@ -630,17 +636,17 @@ while input message; do
 
 	elif ! [ "$message" ]; then
 		current=$(date +%s)
-		for id in ${!tmout[@]}; do
-			if (( $current > ${tmout[$id]} )); then
+		for id in ${!tmdue[@]}; do
+			if (( $current > ${tmdue[$id]} )); then
 				log "request $id failed due to timeout" \
-				    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${tmout[$id]})), notify ${own[$id]}"
+				    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${tmdue[$id]})), notify ${own[$id]}"
 				if [[ -v assign[$id] ]]; then
 					echo "${assign[$id]} << terminate $id"
 					log "terminate assigned request $id on ${assign[$id]}"
 				elif [[ -v own[$id] ]]; then
 					queue=($(erase_from queue $id))
 				fi
-				unset assign[$id] tmout[$id]
+				unset assign[$id] tmdue[$id]
 				code="timeout"
 				output=
 				res[$id]=$code:$output
