@@ -249,6 +249,7 @@ while input message; do
 						unset assign[$id]
 					elif [ "$type" == "response" ]; then
 						[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s)+${tmout[$id]}))
+						echo "$requester << accept request $id {${cmd[$id]}}"
 					fi
 					if [ "$type" != "terminate" ]; then
 						queue=($id ${queue[@]})
