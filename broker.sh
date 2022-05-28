@@ -383,7 +383,7 @@ while input message; do
 				echo "$name << capacity = $capacity"
 				observe_worker_capacity
 				echo "$name << worker_capacity = ${worker_capacity[@]}"
-				log "accept query capacity from $name, capacity = $capacity,"
+				log "accept query capacity from $name, capacity = $capacity," \
 				    "worker_capacity = ($(list_omit ${worker_capacity[@]}))"
 
 			elif [ "$options" == "queue" ]; then
