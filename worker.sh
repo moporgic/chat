@@ -3,8 +3,8 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
 worker=${worker:-worker-1}
-capacity=${capacity:-$(nproc)}
-observe_capacity=${observe_capacity:-observe_capacity.sh}
+capacity=${capacity-$(nproc)}
+observe_capacity=${observe_capacity-observe_capacity.sh}
 
 stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
 logfile=${logfile:-$(mktemp --suffix .log $(basename -s .sh "$0")-$stamp.XXXX)}
@@ -12,7 +12,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
 if [[ $1 != NC=* ]]; then
-	log "worker version 2022-05-27 (protocol 0)"
+	log "worker version 2022-05-28 (protocol 0)"
 	log "options: $@"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
