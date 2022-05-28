@@ -182,13 +182,15 @@ while input message; do
 		load=${BASH_REMATCH[3]}
 		echo "$worker << confirm state $stat $load"
 		log "confirm that $worker state $stat $load"
-		if [ "${state[$worker]%:*}" != "$stat" ] && (( ${#notify[$stat]} )); then
+		current_stat=${state[$worker]:0:4}
+		[ "$current_stat" == "hold" ] && stat="hold"
+		state[$worker]=$stat:$load
+		if [ "$current_stat" != "$stat" ] && (( ${#notify[$stat]} )); then
 			for subscriber in ${notify[$stat]}; do
 				echo "$subscriber << notify $worker state $stat"
 			done
 			log "state has been changed, notify ${notify[$stat]}"
 		fi
-		state[$worker]=$stat:$load
 		if (( ${#notify[capacity]} )) && observe_worker_capacity; then
 			for subscriber in ${notify[capacity]}; do
 				echo "$subscriber << notify capacity ${worker_capacity[@]}"
@@ -228,14 +230,15 @@ while input message; do
 
 		if [ "$who" == "$name" ]; then
 			for id in ${ids[@]}; do
-				if [ "$type" == "terminate" ] && [[ -v own[$id] ]]; then
+				if [ "$type" == "request" ] && [ "${state[$name]:0:4}" == "hold" ]; then
+					state[$name]="held":${state[$name]:5}
+				elif [ "$type" == "terminate" ] && [[ -v own[$id] ]]; then
 					echo "${own[$id]} << $confirm terminate $id"
 				fi
 
 				if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
 					log "confirm that $name ${confirm}ed $type $id"
 					if [ "$type" == "request" ]; then
-						assign[$id]=$name
 						if [[ -v news[assign-${own[$id]}] ]]; then
 							echo "${own[$id]} << notify assign request $id to $name"
 							log "assigned request $id to $name, notify ${own[$id]}"

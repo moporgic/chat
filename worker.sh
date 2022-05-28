@@ -144,7 +144,7 @@ while input message; do
 			echo "$requester << reject request $id"
 			log "reject request $id {$command} from $requester due to busy state, #cmd = ${#cmd[@]}"
 		fi
-		observe_state; notify_state
+		observe_state && notify_state
 
 	elif [[ $message =~ $regex_confirm_response ]]; then
 		who=${BASH_REMATCH[1]}
@@ -169,8 +169,7 @@ while input message; do
 		option=${BASH_REMATCH[4]}
 
 		if [ "$who $confirm $what" == "$broker confirm state" ]; then
-			state=($option)
-			log "$broker confirmed state ${state[@]}"
+			log "$broker confirmed state $option"
 
 		elif [ "$who $what" == "$broker protocol" ]; then
 			if [ "$confirm" == "accept" ]; then
@@ -198,7 +197,7 @@ while input message; do
 					log "request $id {${cmd[$id]}} with pid ${pid[$id]} has been terminated successfully"
 				fi
 				unset own[$id] cmd[$id] pid[$id]
-				observe_state; notify_state
+				observe_state && notify_state
 			else
 				echo "$who << reject terminate $id"
 				log "reject terminate $id from $who since it is owned by ${own[$id]}"
