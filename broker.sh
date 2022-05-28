@@ -3,8 +3,8 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
 capacity=${capacity:-65536}
-timeout=${timeout:-0}
-prefer_worker=${prefer_worker}
+default_timeout=${default_timeout:-0}
+default_workers=${default_workers}
 
 stamp=${stamp:-$(date '+%Y%m%d-%H%M%S')}
 logfile=${logfile:-$(mktemp --suffix .log $(basename -s .sh "$0")-$stamp.XXXX)}
@@ -126,8 +126,8 @@ while input message; do
 				own[$id]=$requester
 				cmd[$id]=$command
 				unset with tmz pfz
-				[[ $options =~ timeout=([0-9]+) ]] && tmz=${BASH_REMATCH[1]} || tmz=$timeout
-				[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]} || pfz=$prefer_worker
+				[[ $options =~ timeout=([0-9]+) ]] && tmz=${BASH_REMATCH[1]} || tmz=$default_timeout
+				[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]} || pfz=$default_workers
 				if (( $tmz )); then
 					tmout[$id]=$tmz
 					tmdue[$id]=$(($(date +%s)+$tmz))
