@@ -346,9 +346,11 @@ void broker_adapter::disconnect() {
 	_log << "disconnecting..." << std::endl;
 
 	boost::asio::post(io_context_, [this]() { socket_.close(); });
-	thread_->join();
-	thread_.reset();
-	buffer_.clear();
+	try {
+		buffer_.clear();
+		thread_->join();
+		thread_.reset();
+	} catch (std::exception&) {}
 	_log << "disconnected" << std::endl;
 }
 
