@@ -614,49 +614,7 @@ run_broker_main() {
 		fi
 
 		if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
-			declare -A workers_for cost_for
-
-			extract_anchor_cost() {
-				src=(${@:-'?'})
-				src=(${src[${load_balance_relax:-0}]} ${src[-1]})
-				cost=${state[$src]%/*}; cost=${cost:5}
-				echo ${cost:--1}
-			}
-
-			workers_for["*"]=$(for worker in ${!state[@]}; do
-				stat=${state[$worker]%/*}
-				[ ${stat:0:4} != "busy" ] && echo $worker:$stat
-			done | sort -t':' -k3n -k2r | cut -d':' -f1)
-			cost_for["*"]=$(extract_anchor_cost ${workers_for["*"]})
-
-			for id in ${queue[@]}; do
-				pref=${prefer[$id]:-"*"}
-				if ! [[ -v workers_for[$pref] ]]; then
-					workers_for[$pref]=$(for worker in ${workers_for["*"]}; do
-						[[ $worker == $pref ]] && echo $worker
-					done)
-					cost_for[$pref]=$(extract_anchor_cost ${workers_for[$pref]})
-				fi
-				workers_pref=(${workers_for[$pref]})
-				max_cost=${cost_for[$pref]:--1}
-
-				for worker in ${workers_pref}; do
-					stat=${state[$worker]%/*}
-					(( ${stat:5} > $max_cost )) && break
-					[ ${stat:0:4} != "idle" ] && continue
-
-					echo "$worker << request $id {${cmd[$id]}}"
-					log "assign request $id to $worker"
-					state[$worker]="hold":${state[$worker]:5}
-					assign[$id]=$worker
-					queue=($(erase_from queue $id))
-					unset id; break
-				done
-
-				[[ -v id ]] && workers_for[$pref]=
-			done
-
-			unset workers_for cost_for
+			assign_queued_requests
 		fi
 	done
 
@@ -664,17 +622,62 @@ run_broker_main() {
 	return 16
 }
 
-observe_worker_capacity() {
-	current_worker_capacity_=${worker_capacity[@]}
-	unset worker_capacity worker_capacity_details
-	worker_capacity=0
-	for worker in ${!state[@]}; do
-		w_capacity=${state[$worker]#*/}
-		worker_capacity=$((worker_capacity+w_capacity))
-		worker_capacity_details+=("[$worker]=$w_capacity")
+assign_queued_requests() {
+	declare -A workers_for cost_for
+	local id worker stat pref workers_pref max_cost
+
+	workers_for["*"]=$(for worker in ${!state[@]}; do
+		stat=${state[$worker]%/*}
+		[ ${stat:0:4} != "busy" ] && echo $worker:$stat
+	done | sort -t':' -k3n -k2r | cut -d':' -f1)
+	cost_for["*"]=$(extract_anchor_cost ${workers_for["*"]})
+
+	for id in ${queue[@]}; do
+		pref=${prefer[$id]:-"*"}
+		if ! [[ -v workers_for[$pref] ]]; then
+			workers_for[$pref]=$(for worker in ${workers_for["*"]}; do
+				[[ $worker == $pref ]] && echo $worker
+			done)
+			cost_for[$pref]=$(extract_anchor_cost ${workers_for[$pref]})
+		fi
+		workers_pref=(${workers_for[$pref]})
+		max_cost=${cost_for[$pref]:--1}
+
+		for worker in ${workers_pref}; do
+			stat=${state[$worker]%/*}
+			(( ${stat:5} > $max_cost )) && break
+			[ ${stat:0:4} != "idle" ] && continue
+
+			echo "$worker << request $id {${cmd[$id]}}"
+			log "assign request $id to $worker"
+			state[$worker]="hold":${state[$worker]:5}
+			assign[$id]=$worker
+			queue=($(erase_from queue $id))
+			id=; break
+		done
+
+		[[ $id ]] && workers_for[$pref]=
 	done
-	worker_capacity+=("${worker_capacity_details[@]}")
-	worker_capacity_=${worker_capacity[@]}
+}
+
+extract_anchor_cost() {
+	local src=(${@:-'?'})
+	src=(${src[${load_balance_relax:-0}]} ${src[-1]})
+	local cost=${state[$src]%/*}; cost=${cost:5}
+	echo ${cost:--1}
+}
+
+observe_worker_capacity() {
+	local current_worker_capacity_=${worker_capacity[@]}
+	local capacity_details=
+	worker_capacity=(0)
+	for worker in ${!state[@]}; do
+		local cap=${state[$worker]#*/}
+		worker_capacity=$((worker_capacity+cap))
+		capacity_details+=("[$worker]=$cap")
+	done
+	worker_capacity+=("${capacity_details[@]}")
+	local worker_capacity_=${worker_capacity[@]}
 	[ "$worker_capacity_" != "$current_worker_capacity_" ]
 	return $?
 }
@@ -686,21 +689,20 @@ list_args() {
 		[[ -v args[$var] ]] || echo $var="${!var}"
 		args[$var]=${!var}
 	done
-	unset args
 }
 
 list_omit() {
 	if (( "$#" <= ${max_printable_list_size:-10} )); then
 		echo "$@"
 	else
-		num_show=${num_print_when_omitted:-6}
+		local num_show=${num_print_when_omitted:-6}
 		echo "${@:1:$((num_show/2))}" "...[$(($#-num_show))]..." "${@:$#-$((num_show/2-1))}"
 	fi
 }
 
 erase_from() {
-	list=${1:?}[@]
-	value=${2:?}
+	local list=${1:?}[@]
+	local value=${2:?}
 	list=" ${!list} "
 	echo ${list/ $value / }
 }

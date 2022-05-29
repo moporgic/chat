@@ -4,8 +4,7 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
 worker=${worker:-worker-1}
-[[ ${capacity-$(nproc)} =~ ^([0-9]+)|(.+)$ ]]
-capacity=${BASH_REMATCH[1]}
+[[ ${capacity-$(nproc)} =~ ^([0-9]+)|(.+)$ ]] && capacity=${BASH_REMATCH[1]}
 observe_capacity=${observe_capacity:-${BASH_REMATCH[2]:-capacity.sh}}
 
 session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
@@ -327,10 +326,10 @@ run_worker_main() {
 }
 
 execute() {
-	id=$1
+	local id=$1
 	log "execute request $id {${cmd[$id]}}"
-	output=$(eval "${cmd[$id]}" 2>&1)
-	code=$?
+	local output=$(eval "${cmd[$id]}" 2>&1)
+	local code=$?
 	# drop ASCII terminal color codes then escape '\' '\n' '\t' with '\'
 	output=$(echo -n "$output" | sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
 	         sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]')
@@ -347,12 +346,12 @@ observe_capacity() {
 }
 
 observe_state() {
-	current_state_=${state[@]}
-	unset state
-	current_capacity=${capacity:-$(observe_capacity)}
+	local current_state_=${state[@]}
+	local current_capacity=${capacity:-$(observe_capacity)}
+	state=()
 	(( ${#cmd[@]} < ${current_capacity:-0} )) && state=idle || state=busy
 	state+=(${#cmd[@]}/${current_capacity:-0})
-	state_=${state[@]}
+	local state_=${state[@]}
 	[ "$state_" != "$current_state_" ]
 	return $?
 }
@@ -369,14 +368,13 @@ list_args() {
 		[[ -v args[$var] ]] || echo $var="${!var}"
 		args[$var]=${!var}
 	done
-	unset args
 }
 
 list_omit() {
 	if (( "$#" <= ${max_printable_list_size:-10} )); then
 		echo "$@"
 	else
-		num_show=${num_print_when_omitted:-6}
+		local num_show=${num_print_when_omitted:-6}
 		echo "${@:1:$((num_show/2))}" "...[$(($#-num_show))]..." "${@:$#-$((num_show/2-1))}"
 	fi
 }
