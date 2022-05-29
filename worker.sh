@@ -4,8 +4,9 @@ for var in "$@"; do declare "$var" 2>/dev/null; done
 
 broker=${broker:-broker}
 worker=${worker:-worker-1}
-capacity=${capacity-$(nproc)}
-observe_capacity=${observe_capacity-observe_capacity.sh}
+[[ ${capacity-$(nproc)} =~ ^([0-9]+)|(.+)$ ]]
+capacity=${BASH_REMATCH[1]}
+observe_capacity=${observe_capacity:-${BASH_REMATCH[2]:-capacity.sh}}
 
 session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
 logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
