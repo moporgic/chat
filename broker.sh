@@ -13,7 +13,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
 if [[ $1 != NC=* ]]; then
-	log "broker version 2022-05-29 (protocol 0)"
+	log "broker version 2022-05-30 (protocol 0)"
 	log "options: $@"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
@@ -145,12 +145,7 @@ run_broker_main() {
 				done
 				log "state has been changed, notify ${notify[$stat]}"
 			fi
-			if (( ${#notify[capacity]} )) && observe_worker_capacity; then
-				for subscriber in ${notify[capacity]}; do
-					echo "$subscriber << notify capacity ${worker_capacity[@]}"
-				done
-				log "capacity has been changed, notify ${notify[capacity]}"
-			fi
+			notify_capacity
 
 		elif [[ $message =~ $regex_confirm ]]; then
 			name=${BASH_REMATCH[1]}
@@ -241,12 +236,7 @@ run_broker_main() {
 								log "revoke assigned request $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
 							fi
 						done
-						if (( ${#notify[capacity]} )) && observe_worker_capacity; then
-							for subscriber in ${notify[capacity]}; do
-								echo "$subscriber << notify capacity ${worker_capacity[@]}"
-							done
-							log "capacity has been changed, notify ${notify[capacity]}"
-						fi
+						notify_capacity
 					fi
 					for id in ${!own[@]}; do
 						if [ "${own[$id]}" == "$name" ] && ! [ "${keep_unowned_tasks}" ]; then
@@ -338,7 +328,7 @@ run_broker_main() {
 
 				elif [ "$options" == "capacity" ]; then
 					echo "$name << capacity = $capacity"
-					observe_worker_capacity
+					observe_worker_capacity raw
 					echo "$name << worker_capacity = ${worker_capacity[@]}"
 					log "accept query capacity from $name, capacity = $capacity," \
 					    "worker_capacity = ($(list_omit ${worker_capacity[@]}))"
@@ -521,6 +511,8 @@ run_broker_main() {
 				if [ "$var" == "broker" ]; then
 					log "broker name has been changed, register $broker on the chat system..."
 					echo "name $broker"
+				elif [ "$var" == "capacity" ]; then
+					notify_capacity
 				fi
 
 			elif [ "$command" == "unset" ]; then
@@ -676,10 +668,21 @@ observe_worker_capacity() {
 		worker_capacity=$((worker_capacity+cap))
 		capacity_details+=("[$worker]=$cap")
 	done
-	worker_capacity+=("${capacity_details[@]}")
+	[ "$1" != "raw" ] && worker_capacity=$((worker_capacity < capacity ? worker_capacity : capacity))
+	worker_capacity+=(${capacity_details[@]})
 	local worker_capacity_=${worker_capacity[@]}
 	[ "$worker_capacity_" != "$current_worker_capacity_" ]
 	return $?
+}
+
+notify_capacity() {
+	if (( ${#notify[capacity]} )) && observe_worker_capacity; then
+		local subscriber
+		for subscriber in ${notify[capacity]}; do
+			echo "$subscriber << notify capacity ${worker_capacity[@]}"
+		done
+		log "capacity has been changed, notify ${notify[capacity]}"
+	fi
 }
 
 list_args() {
