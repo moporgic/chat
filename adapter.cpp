@@ -202,6 +202,10 @@ void broker_adapter::handle_input(const std::string& input) {
 					std::string confirm = accept ? "accept" : "reject";
 					async_output(confirm + " response " + std::to_string(id));
 					_log << boost::format("%s response %llu %s {%s}") % confirm % id % code % output << std::endl;
+					if (!accept) {
+						task->state_ = task::state_unconfirmed;
+						unconfirmed_.push_back(task);
+					}
 
 				} else {
 					_log << boost::format("ignore the response of nonexistent request %llu") % id << std::endl;
