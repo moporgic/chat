@@ -115,7 +115,7 @@ run_worker_main() {
 					observe_state; notify_state
 
 				elif [ "$confirm" == "reject" ]; then
-					log "handshake failed, unsupported protocol; exit"
+					log "handshake failed, unsupported protocol; shutdown"
 					return 2
 				fi
 
@@ -166,7 +166,7 @@ run_worker_main() {
 					log "register worker on the chat system..."
 					echo "name ${worker:=worker-1}"
 				elif [[ "$info" == "failed protocol"* ]]; then
-					log "unsupported protocol; exit"
+					log "unsupported protocol; shutdown"
 					return 1
 				elif [[ "$info" == "name"* ]]; then
 					log "registered as $worker successfully"

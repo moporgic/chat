@@ -299,7 +299,7 @@ run_broker_main() {
 					log "register $broker on the chat system..."
 					echo "name $broker"
 				elif [[ "$message" == "failed protocol"* ]]; then
-					log "unsupported protocol; exit"
+					log "unsupported protocol; shutdown"
 					return 1
 				elif [[ "$message" == "name"* ]]; then
 					log "registered as $broker successfully"
@@ -311,7 +311,7 @@ run_broker_main() {
 						unset workers
 					fi
 				elif [[ "$message" == "failed name"* ]]; then
-					log "another $broker is already running? exit"
+					log "another $broker is already running? shutdown"
 					return 2
 				fi
 			fi
