@@ -262,32 +262,34 @@ run_broker_main() {
 				elif [[ $message =~ $regex_rename ]]; then
 					old_name=${BASH_REMATCH[1]}
 					new_name=${BASH_REMATCH[2]}
-					log "$old_name renamed as $new_name"
-					if [[ -v state[$old_name] ]]; then
-						state[$new_name]=${state[$old_name]}
-						unset state[$old_name]
-						log "transfer the worker state to $new_name"
-						for id in ${!assign[@]}; do
-							if [ "${assign[$id]}" == "$old_name" ]; then
-								log "transfer the ownership of assignment $id"
-								assign[$id]=$new_name
+					if [ "$new_name" != "$broker" ]; then
+						log "$old_name renamed as $new_name"
+						if [[ -v state[$old_name] ]]; then
+							state[$new_name]=${state[$old_name]}
+							unset state[$old_name]
+							log "transfer the worker state to $new_name"
+							for id in ${!assign[@]}; do
+								if [ "${assign[$id]}" == "$old_name" ]; then
+									log "transfer the ownership of assignment $id"
+									assign[$id]=$new_name
+								fi
+							done
+						fi
+						for id in ${!own[@]}; do
+							if [ "${own[$id]}" == "$old_name" ]; then
+								log "transfer the ownerships of request $id and response $id"
+								own[$id]=$new_name
+							fi
+						done
+						for item in ${!notify[@]}; do
+							if [[ " ${notify[$item]} " == *" $old_name "* ]]; then
+								log "transfer the $item subscription to $new_name"
+								notify[$item]=$(printf "%s\n" ${notify[$item]} $new_name | sed "/^${old_name}$/d")
+								news[$item-$new_name]=${news[$item-$old_name]}
+								unset news[$item-$old_name]
 							fi
 						done
 					fi
-					for id in ${!own[@]}; do
-						if [ "${own[$id]}" == "$old_name" ]; then
-							log "transfer the ownerships of request $id and response $id"
-							own[$id]=$new_name
-						fi
-					done
-					for item in ${!notify[@]}; do
-						if [[ " ${notify[$item]} " == *" $old_name "* ]]; then
-							log "transfer the $item subscription to $new_name"
-							notify[$item]=$(printf "%s\n" ${notify[$item]} $new_name | sed "/^${old_name}$/d")
-							news[$item-$new_name]=${news[$item-$old_name]}
-							unset news[$item-$old_name]
-						fi
-					done
 				fi
 
 			elif [ "$type" == "%" ]; then
