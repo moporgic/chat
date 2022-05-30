@@ -408,7 +408,7 @@ run_broker_main() {
 					log "accept query responses from $name, responses = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
-					opts=($(list_args ${BASH_REMATCH[2]:-"$@" ${set_var[@]} session logfile}))
+					opts=($(list_args ${BASH_REMATCH[2]:-"$@" ${set_var[@]}}))
 					vars=()
 					for opt in ${opts[@]}; do vars+=(${opt%%=*}); done
 					echo "$name << options = (${vars[@]})"
@@ -560,7 +560,7 @@ run_broker_main() {
 								fi
 							done
 							log "$broker is restarting..."
-							exec $0 $(list_args "$@" ${set_var[@]} workers session logfile)
+							exec $0 $(list_args "$@" ${set_var[@]} workers)
 						fi
 					fi
 					unset targets
@@ -687,7 +687,7 @@ notify_capacity() {
 
 list_args() {
 	declare -A args
-	for var in "$@"; do
+	for var in broker capacity session logfile "$@"; do
 		var=${var%%=*}
 		[[ -v args[$var] ]] || echo $var="${!var}"
 		args[$var]=${!var}

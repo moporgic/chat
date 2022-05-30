@@ -224,7 +224,7 @@ run_worker_main() {
 					log "accept query requests from $name, requests = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
-					opts=($(list_args ${BASH_REMATCH[2]:-"$@" ${set_var[@]} session logfile}))
+					opts=($(list_args ${BASH_REMATCH[2]:-"$@" ${set_var[@]}}))
 					vars=()
 					for opt in ${opts[@]}; do vars+=(${opt%%=*}); done
 					echo "$name << options = (${vars[@]})"
@@ -289,7 +289,7 @@ run_worker_main() {
 					echo "$name << confirm restart"
 					log "accept operate restart from $name"
 					log "$worker is restarting..."
-					exec $0 $(list_args "$@" ${set_var[@]} session logfile)
+					exec $0 $(list_args "$@" ${set_var[@]})
 
 				else
 					log "ignore $command $options from $name"
@@ -363,7 +363,7 @@ notify_state() {
 
 list_args() {
 	declare -A args
-	for var in "$@"; do
+	for var in broker worker capacity observe_capacity session logfile "$@"; do
 		var=${var%%=*}
 		[[ -v args[$var] ]] || echo $var="${!var}"
 		args[$var]=${!var}
