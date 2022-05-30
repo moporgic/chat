@@ -10,11 +10,10 @@ default_workers=${default_workers}
 session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
 logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
-trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 
-if [[ $1 != NC=* ]]; then
+startup_broker() {
 	log "broker version 2022-05-30 (protocol 0)"
-	log "options: $@"
+	list_args $(common_vars) "$@" | while IFS= read -r opt; do log "option: $opt"; done
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
@@ -42,10 +41,7 @@ if [[ $1 != NC=* ]]; then
 		log "max number of connections is reached"
 		exit $code
 	fi
-elif [[ $1 == NC=* ]]; then
-	trap 'cleanup 2>/dev/null;' EXIT
-	shift
-fi
+}
 
 run_broker_main() {
 	declare -A own # [id]=requester
@@ -696,7 +692,7 @@ list_args() {
 		var=${var%%=*}
 		[[ -v args[$var] ]] || echo $var="${!var}"
 		args[$var]=${!var}
-	done
+	done 2>/dev/null
 }
 
 list_omit() {
@@ -721,4 +717,12 @@ input() {
 	return $(( $? < 128 ? $? : 0 ))
 }
 
+#### script main routine ####
+if [[ $1 != NC=* ]]; then
+	trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
+	startup_broker "$@"
+elif [[ $1 == NC=* ]]; then
+	shift
+	trap 'cleanup 2>/dev/null;' EXIT
+fi
 run_broker_main "$@"
