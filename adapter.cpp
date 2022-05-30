@@ -273,7 +273,7 @@ void broker_adapter::handle_input(const std::string& input) {
 			_log << boost::format("send handshake to %s...") % broker_ << std::endl;
 			async_output("use protocol 0");
 
-		} else if (message.find("failed protocol") == 0 || message.find("failed name") == 0) {
+		} else if (message.find("failed") == 0) {
 			handle_handshake_error(message);
 		}
 
