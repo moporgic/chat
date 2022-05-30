@@ -44,6 +44,7 @@ if [[ $1 != NC=* ]]; then
 	fi
 elif [[ $1 == NC=* ]]; then
 	trap 'cleanup 2>/dev/null;' EXIT
+	shift
 fi
 
 run_broker_main() {
@@ -408,7 +409,7 @@ run_broker_main() {
 					log "accept query responses from $name, responses = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
-					opts=($(list_args ${BASH_REMATCH[2]:-"$@" ${set_var[@]}}))
+					opts=($(list_args ${BASH_REMATCH[2]:-$(common_vars) ${set_var[@]} "$@"}))
 					vars=()
 					for opt in ${opts[@]}; do vars+=(${opt%%=*}); done
 					echo "$name << options = (${vars[@]})"
@@ -560,7 +561,7 @@ run_broker_main() {
 								fi
 							done
 							log "$broker is restarting..."
-							exec $0 $(list_args "$@" ${set_var[@]} workers)
+							exec $0 $(list_args $(common_vars) ${set_var[@]} "$@" workers)
 						fi
 					fi
 					unset targets
@@ -685,9 +686,13 @@ notify_capacity() {
 	fi
 }
 
+common_vars() {
+	echo broker capacity session logfile
+}
+
 list_args() {
 	declare -A args
-	for var in broker capacity session logfile "$@"; do
+	for var in "$@"; do
 		var=${var%%=*}
 		[[ -v args[$var] ]] || echo $var="${!var}"
 		args[$var]=${!var}

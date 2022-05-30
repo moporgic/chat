@@ -13,7 +13,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 trap 'cleanup 2>/dev/null; log "${worker:-worker} is terminated";' EXIT
 
 if [[ $1 != NC=* ]]; then
-	log "worker version 2022-05-29 (protocol 0)"
+	log "worker version 2022-05-30 (protocol 0)"
 	log "options: $@"
 	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
@@ -44,6 +44,7 @@ if [[ $1 != NC=* ]]; then
 	fi
 elif [[ $1 == NC=* ]]; then
 	trap 'cleanup 2>/dev/null;' EXIT
+	shift
 fi
 
 run_worker_main() {
@@ -224,7 +225,7 @@ run_worker_main() {
 					log "accept query requests from $name, requests = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
-					opts=($(list_args ${BASH_REMATCH[2]:-"$@" ${set_var[@]}}))
+					opts=($(list_args ${BASH_REMATCH[2]:-$(common_vars) ${set_var[@]} "$@"}))
 					vars=()
 					for opt in ${opts[@]}; do vars+=(${opt%%=*}); done
 					echo "$name << options = (${vars[@]})"
@@ -289,7 +290,7 @@ run_worker_main() {
 					echo "$name << confirm restart"
 					log "accept operate restart from $name"
 					log "$worker is restarting..."
-					exec $0 $(list_args "$@" ${set_var[@]})
+					exec $0 $(list_args $(common_vars) ${set_var[@]} "$@")
 
 				else
 					log "ignore $command $options from $name"
@@ -361,9 +362,13 @@ notify_state() {
 	log "state ${state[@]}; notify ${1:-$broker}"
 }
 
+common_vars() {
+	echo broker worker capacity observe_capacity session logfile
+}
+
 list_args() {
 	declare -A args
-	for var in broker worker capacity observe_capacity session logfile "$@"; do
+	for var in "$@"; do
 		var=${var%%=*}
 		[[ -v args[$var] ]] || echo $var="${!var}"
 		args[$var]=${!var}
