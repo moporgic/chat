@@ -254,6 +254,8 @@ run_worker_main() {
 					log "worker name has been changed, register $worker on the chat system..."
 					echo "name ${worker:=worker-1}"
 				elif [ "$var" == "capacity" ] || [ "$var" == "observe_capacity" ]; then
+					[[ ${capacity-$(nproc)} =~ ^([0-9]+)|(.+)$ ]] && capacity=${BASH_REMATCH[1]}
+					observe_capacity=${observe_capacity:-${BASH_REMATCH[2]:-capacity.sh}}
 					observe_state && notify_state
 				elif [ "$var" == "state" ]; then
 					notify_state
