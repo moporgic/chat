@@ -14,7 +14,7 @@ log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 startup_broker() {
 	log "broker version 2022-05-30 (protocol 0)"
 	list_args $(common_vars) "$@" | while IFS= read -r opt; do log "option: $opt"; done
-	bash envinfo.sh 2>/dev/null | while IFS= read -r info; do log "platform $info"; done
+	list_envinfo | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
@@ -413,18 +413,13 @@ run_broker_main() {
 					log "accept query options from $name, options = ($(list_omit ${vars[@]}))"
 
 				elif [ "$options" == "envinfo" ]; then
-					if [ -e envinfo.sh ]; then
-						echo "$name << accept query envinfo"
-						log "accept query envinfo from $name"
-						{
-							envinfo=$(bash envinfo.sh 2>/dev/null)
-							echo "$name << result envinfo ($(<<<$envinfo wc -l))"
-							<<< $envinfo xargs -r -d'\n' -L1 echo "$name << #"
-						} &
-					else
-						echo "$name << reject query envinfo"
-						log "reject query envinfo from $name; not installed"
-					fi
+					echo "$name << accept query envinfo"
+					log "accept query envinfo from $name"
+					{
+						envinfo=$(list_envinfo)
+						echo "$name << result envinfo ($(<<<$envinfo wc -l))"
+						<<< $envinfo xargs -r -d'\n' -L1 echo "$name << #"
+					} &
 				else
 					log "ignore $command $options from $name"
 				fi
@@ -716,6 +711,41 @@ input() {
 	IFS= read -r -t ${input_timeout:-1} ${1:-message}
 	return $(( $? < 128 ? $? : 0 ))
 }
+
+list_envinfo() (
+	exec 2>/dev/null
+	# host name
+	echo "Host: $(hostname)"
+	# OS name and version
+	osinfo=$(uname -o 2>/dev/null | sed "s|GNU/||")
+	osinfo+=" $(uname -r | sed -E 's/[^0-9.]+.+$//g')"
+	if [[ $OSTYPE =~ cygwin|msys ]]; then
+		ver=($(cmd /c ver 2>/dev/null | tr "[\r\n]" " "))
+		(( ${#ver[@]} )) && osinfo+=" (Windows ${ver[-1]})"
+	fi
+	echo "OS: $osinfo"
+	# CPU model
+	cpuinfo=$(grep -m1 name /proc/cpuinfo | sed -E 's/.+:|\(\S+\)|CPU|[0-9]+-Core.+|@.+//g' | xargs)
+	nodes=$(lscpu | grep 'NUMA node(s)' | cut -d: -f2 | xargs)
+	if (( ${nodes:-1} != 1 )); then
+		for (( i=0; i<${nodes:-1}; i++ )); do
+			echo "CPU $i: $cpuinfo ($(taskset -c $(lscpu | grep 'NUMA node'$i' CPU' | cut -d: -f2) nproc)x)"
+		done
+	else
+		echo "CPU: $cpuinfo ($(nproc --all)x)"
+	fi
+	# CPU affinity
+	if [ "$(nproc)" != "$(nproc --all)" ]; then
+		echo "CPU $(taskset -pc $$ | cut -d' ' -f4-) ($(nproc)x)"
+	fi
+	# GPU model
+	nvidia-smi -L 2>/dev/null | sed -E "s/ \(UUID:.+$//g" | while IFS= read GPU; do echo "$GPU"; done
+	# memory info
+	size=($(head -n1 /proc/meminfo))
+	size=$((${size[1]}0/1024/1024))
+	size=$((size/10)).$((size%10))
+	echo "RAM: $(printf "%.1fG" $size)"
+)
 
 #### script main routine ####
 if [[ $1 != NC=* ]]; then
