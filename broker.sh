@@ -274,6 +274,7 @@ run_broker_main() {
 									assign[$id]=$new_name
 								fi
 							done
+							notify_capacity
 						fi
 						for id in ${!own[@]}; do
 							if [ "${own[$id]}" == "$old_name" ]; then
