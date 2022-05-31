@@ -24,7 +24,7 @@ broker_main() {
 	declare -A notify # [type]=subscriber...
 	declare -a queue # id...
 
-	list_args $(common_vars) "$@" | while IFS= read -r opt; do log "option: $opt"; done
+	list_args "$@" $(common_vars) | while IFS= read -r opt; do log "option: $opt"; done
 	list_envinfo | while IFS= read -r info; do log "platform $info"; done
 
 	while init_system_io "$@"; do
@@ -390,7 +390,7 @@ broker_routine() {
 					log "accept query responses from $name, responses = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
-					opts=($(list_args ${BASH_REMATCH[2]:-$(common_vars) ${set_var[@]} "$@"}))
+					opts=($(list_args ${BASH_REMATCH[2]:-"$@" $(common_vars) ${set_var[@]}}))
 					vars=()
 					for opt in ${opts[@]}; do vars+=(${opt%%=*}); done
 					echo "$name << options = (${vars[@]})"
@@ -537,7 +537,7 @@ broker_routine() {
 								fi
 							done
 							log "$broker is restarting..."
-							exec $0 $(list_args $(common_vars) ${set_var[@]} "$@" workers)
+							exec $0 $(list_args "$@" $(common_vars) ${set_var[@]} workers)
 						fi
 					fi
 					unset targets
@@ -696,12 +696,12 @@ init_system_io() {
 }
 
 list_args() {
-	declare -A args
+	declare -A args=()
 	for var in "$@"; do
 		var=${var%%=*}
-		[[ $var =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]] || continue
-		[[ -v args[$var] ]] || echo $var="${!var}"
-		args[$var]=${!var}
+		[[ -v args[$var] ]] && continue
+		[[ $var =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]] && echo "$var=${!var}" || echo "$var"
+		args[$var]=$var
 	done
 }
 
