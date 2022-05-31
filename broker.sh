@@ -597,6 +597,9 @@ run_broker_main() {
 					echo "${own[$id]} << response $id $code {$output}"
 				fi
 			done
+
+		else
+			log "ignore message: $message"
 		fi
 
 		if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
