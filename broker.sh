@@ -672,18 +672,15 @@ common_vars() {
 init_system_io() {
 	conn_count=${conn_count:-0}
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
-		trap 'cleanup 2>/dev/null' EXIT
-		cleanup() { exec 8<&- 8>&-; }
 		local addr=${BASH_REMATCH[1]}
 		local port=${BASH_REMATCH[2]}
 		local wait_for_conn=0
 		while (( $((conn_count++)) < ${max_conn_count:-65536} )); do
 			log "connect to chat system at $addr:$port..."
-			cleanup
 			sleep ${wait_for_conn:-0}
-			if { exec 8<>/dev/tcp/$addr/$port; } 2>/dev/null; then
+			if { exec {nc}<>/dev/tcp/$addr/$port; } 2>/dev/null; then
 				log "connected to chat system successfully"
-				exec 0<&8 1>&8 && return 0
+				exec 0<&$nc 1>&$nc {nc}<&- {nc}>&- && return 0
 			fi
 			log "failed to connect $addr:$port, host down?"
 			wait_for_conn=60
