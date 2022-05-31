@@ -1,42 +1,17 @@
 #!/bin/bash
-for var in "$@"; do declare "$var" 2>/dev/null; done
 
-broker=${broker:-broker}
-capacity=${capacity:-65536}
-default_timeout=${default_timeout:-0}
-default_workers=${default_workers}
-
-session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
-logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
-
-startup_broker() {
+broker_main() {
 	log "broker version 2022-05-31 (protocol 0)"
-	list_args $(common_vars) "$@" | while IFS= read -r opt; do log "option: $opt"; done
-	list_envinfo | while IFS= read -r info; do log "platform $info"; done
-	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
-		addr=${BASH_REMATCH[1]}
-		port=${BASH_REMATCH[2]}
-		while (( $((conn_count++)) < ${max_conn_count:-65536} )); do
-			log "connect to chat system at $addr:$port..."
-			sleep ${wait_for_conn:-0}
-			if { exec 8<>/dev/tcp/$addr/$port; } 2>/dev/null; then
-				log "connected to chat system successfully"
-				$0 CHAT=$1 "${@:2}" session=$session logfile=$logfile <&8 >&8
-				exec 8<&- 8>&-
-				tail -n2 $logfile | grep -q "shutdown" && exit 0
-				code=0; wait_for_conn=10
-			else
-				log "failed to connect $addr:$port, host down?"
-				code=$((code+1)); wait_for_conn=60
-			fi
-		done
-		log "max number of connections is reached"
-		exit $code
-	fi
-}
+	for var in "$@"; do declare "$var" 2>/dev/null; done
 
-run_broker_main() {
+	broker=${broker:-broker}
+	capacity=${capacity:-65536}
+	default_timeout=${default_timeout:-0}
+	default_workers=${default_workers}
+
+	session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
+	logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
+
 	declare -A own # [id]=requester
 	declare -A cmd # [id]=command
 	declare -A res # [id]=code:output
@@ -49,15 +24,29 @@ run_broker_main() {
 	declare -A notify # [type]=subscriber...
 	declare -a queue # id...
 
+	list_args $(common_vars) "$@" | while IFS= read -r opt; do log "option: $opt"; done
+	list_envinfo | while IFS= read -r info; do log "platform $info"; done
+
+	while init_system_io "$@"; do
+		broker_routine "$@"
+		local code=$?
+		(( $code < 16 )) && break
+	done
+
+	log "${broker:-broker} is terminated"
+	return $code
+}
+
+broker_routine() {
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
 
-	regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
-	regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
-	regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
-	regex_worker_state="^(\S+) >> state (idle|busy) (\S+/\S+)$"
-	regex_others="^(\S+) >> (query|terminate|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
-	regex_chat_system="^(#|%) (.+)$"
+	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
+	local regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
+	local regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
+	local regex_worker_state="^(\S+) >> state (idle|busy) (\S+/\S+)$"
+	local regex_others="^(\S+) >> (query|terminate|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
+	local regex_chat_system="^(#|%) (.+)$"
 
 	while input; do
 		if [[ $message =~ $regex_request ]]; then
@@ -680,6 +669,32 @@ common_vars() {
 	echo broker capacity session logfile
 }
 
+init_system_io() {
+	conn_count=${conn_count:-0}
+	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
+		trap 'cleanup 2>/dev/null' EXIT
+		cleanup() { exec 8<&- 8>&-; }
+		local addr=${BASH_REMATCH[1]}
+		local port=${BASH_REMATCH[2]}
+		local wait_for_conn=0
+		while (( $((conn_count++)) < ${max_conn_count:-65536} )); do
+			log "connect to chat system at $addr:$port..."
+			cleanup
+			sleep ${wait_for_conn:-0}
+			if { exec 8<>/dev/tcp/$addr/$port; } 2>/dev/null; then
+				log "connected to chat system successfully"
+				exec 0<&8 1>&8 && return 0
+			fi
+			log "failed to connect $addr:$port, host down?"
+			wait_for_conn=60
+		done
+	elif (( $((conn_count++)) < ${max_conn_count:-1} )); then
+		return 0
+	fi
+	log "max number of sessions is reached"
+	return 16
+}
+
 list_args() {
 	declare -A args
 	for var in "$@"; do
@@ -754,12 +769,6 @@ list_envinfo() (
 	echo "RAM: $(printf "%.1fG" $size)"
 )
 
-#### script main routine ####
-if [[ $1 != CHAT=* ]]; then
-	trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
-	startup_broker "$@"
-elif [[ $1 == CHAT=* ]]; then
-	shift
-	trap 'cleanup 2>/dev/null;' EXIT
-fi
-run_broker_main "$@"
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
+
+broker_main "$@" # script main routine
