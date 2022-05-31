@@ -11,7 +11,7 @@ logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
 
 startup_worker() {
-	log "worker version 2022-05-30 (protocol 0)"
+	log "worker version 2022-05-31 (protocol 0)"
 	list_args $(common_vars) "$@" | while IFS= read -r opt; do log "option: $opt"; done
 	list_envinfo | while IFS= read -r info; do log "platform $info"; done
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
@@ -58,7 +58,7 @@ run_worker_main() {
 	regex_others="^(\S+) >> (operate|shell|set|unset|use|query) (.+)$"
 	regex_chat_system="^(#|%) (.+)$"
 
-	while input message; do
+	while input; do
 		if [[ $message =~ $regex_request ]]; then
 			requester=${BASH_REMATCH[1]}
 			id=${BASH_REMATCH[4]:-${id_next:-1}}; id_next=$((id+1))
@@ -377,9 +377,17 @@ list_omit() {
 }
 
 input() {
-	unset ${1:-message}
-	IFS= read -r -t ${input_timeout:-1} ${1:-message}
-	return $(( $? < 128 ? $? : 0 ))
+	local input_buffer code
+	IFS= read -r -t ${system_tick:-1} input_buffer
+	code=$?
+	if [ $code == 0 ]; then
+		message=${message_buffer}${input_buffer}
+		message_buffer=
+	else
+		message=
+		message_buffer+=${input_buffer}
+	fi
+	return $(( $code < 128 ? $code : 0 ))
 }
 
 list_envinfo() (
