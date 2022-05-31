@@ -286,11 +286,11 @@ broker_routine() {
 				elif [[ "$message" == "name"* ]]; then
 					log "registered as $broker successfully"
 					if [ "$workers" ]; then
-						for worker in ${workers//:/ }; do
+						workers=(${workers[@]//:/ })
+						for worker in ${workers[@]}; do
 							echo "$worker << query state"
 						done
-						log "query states from ${workers//:/ }"
-						unset workers
+						log "query states from ${workers[@]}"
 					fi
 				elif [[ "$message" == "failed name"* ]]; then
 					log "another $broker is already running? shutdown"
@@ -336,17 +336,17 @@ broker_routine() {
 					log "accept query assign from $name, assign = ($(list_omit ${assignment[@]}))"
 
 				elif [[ "$options" =~ ^(worker)s?(.*)$ ]]; then
-					workerx=(${BASH_REMATCH[2]:-$(<<< ${!state[@]} xargs -r printf "%s\n" | sort)})
-					workerx=($(for worker in ${workerx[@]}; do [[ -v state[$worker] ]] && echo $worker; done))
-					echo "$name << workers = (${workerx[@]})"
-					for worker in ${workerx[@]}; do
+					workers=(${BASH_REMATCH[2]:-$(<<< ${!state[@]} xargs -r printf "%s\n" | sort)})
+					workers=($(for worker in ${workers[@]}; do [[ -v state[$worker] ]] && echo $worker; done))
+					echo "$name << workers = (${workers[@]})"
+					for worker in ${workers[@]}; do
 						num_assign=0
 						for id in ${!assign[@]}; do
 							[ "${assign[$id]}" == "$worker" ] && num_assign=$((num_assign+1))
 						done
 						echo "$name << # $worker ${state[$worker]} $num_assign assigned"
 					done
-					log "accept query workers from $name, workers = ($(list_omit ${workerx[@]}))"
+					log "accept query workers from $name, workers = ($(list_omit ${workers[@]}))"
 
 				elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
@@ -530,14 +530,8 @@ broker_routine() {
 						if [ "$type" == "shutdown" ]; then
 							return 0
 						elif [ "$type" == "restart" ]; then
-							unset workers
-							for worker in ${!state[@]}; do
-								if ! [[ -v targets[$worker] ]]; then
-									workers+=${workers:+:}$worker
-								fi
-							done
 							log "$broker is restarting..."
-							exec $0 $(list_args "$@" $(common_vars) ${set_var[@]} workers)
+							exec $0 $(list_args "$@" $(common_vars) ${set_var[@]})
 						fi
 					fi
 					unset targets
@@ -596,7 +590,7 @@ broker_routine() {
 
 assign_queued_requests() {
 	declare -A workers_for cost_for
-	local id worker stat pref workers_pref max_cost
+	local id worker stat pref workers max_cost
 
 	workers_for["*"]=$(for worker in ${!state[@]}; do
 		stat=${state[$worker]%/*}
@@ -612,10 +606,10 @@ assign_queued_requests() {
 			done)
 			cost_for[$pref]=$(extract_anchor_cost ${workers_for[$pref]})
 		fi
-		workers_pref=(${workers_for[$pref]})
+		workers=(${workers_for[$pref]})
 		max_cost=${cost_for[$pref]:--1}
 
-		for worker in ${workers_pref}; do
+		for worker in ${workers[@]}; do
 			stat=${state[$worker]%/*}
 			(( ${stat:5} > $max_cost )) && break
 			[ ${stat:0:4} != "idle" ] && continue
