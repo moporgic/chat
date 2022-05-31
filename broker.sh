@@ -699,9 +699,10 @@ list_args() {
 	declare -A args
 	for var in "$@"; do
 		var=${var%%=*}
+		[[ $var =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]] || continue
 		[[ -v args[$var] ]] || echo $var="${!var}"
 		args[$var]=${!var}
-	done 2>/dev/null
+	done
 }
 
 list_omit() {
