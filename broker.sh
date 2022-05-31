@@ -17,21 +17,15 @@ startup_broker() {
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		addr=${BASH_REMATCH[1]}
 		port=${BASH_REMATCH[2]}
-		nc=($(command -v ncat nc netcat | xargs -r -L1 basename))
-		if ! (( ${#nc[@]} )); then
-			log "no available netcat commands (ncat, nc, netcat)"
-			exit 16
-		fi
 		while (( $((conn_count++)) < ${max_conn_count:-65536} )); do
 			log "connect to chat system at $addr:$port..."
-			coproc NC { $nc $addr $port; }
-			sleep ${wait_for_conn:-1}
-			if ps -p $NC_PID >/dev/null 2>&1; then
+			sleep ${wait_for_conn:-0}
+			if { exec 8<>/dev/tcp/$addr/$port; } 2>/dev/null; then
 				log "connected to chat system successfully"
-				$0 NC=$1 "${@:2}" session=$session logfile=$logfile <&${NC[0]} >&${NC[1]}
-				kill $NC_PID >/dev/null 2>&1
+				$0 CHAT=$1 "${@:2}" session=$session logfile=$logfile <&8 >&8
+				exec 8<&- 8>&-
 				tail -n2 $logfile | grep -q "shutdown" && exit 0
-				code=0; wait_for_conn=1
+				code=0; wait_for_conn=10
 			else
 				log "failed to connect $addr:$port, host down?"
 				code=$((code+1)); wait_for_conn=60
@@ -761,10 +755,10 @@ list_envinfo() (
 )
 
 #### script main routine ####
-if [[ $1 != NC=* ]]; then
+if [[ $1 != CHAT=* ]]; then
 	trap 'cleanup 2>/dev/null; log "${broker:-broker} is terminated";' EXIT
 	startup_broker "$@"
-elif [[ $1 == NC=* ]]; then
+elif [[ $1 == CHAT=* ]]; then
 	shift
 	trap 'cleanup 2>/dev/null;' EXIT
 fi
