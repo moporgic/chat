@@ -1,7 +1,7 @@
 #!/bin/bash
 
 broker_main() {
-	log "broker version 2022-05-31 (protocol 0)"
+	log "broker version 2022-06-01 (protocol 0)"
 	for var in "$@"; do declare "$var" 2>/dev/null; done
 
 	broker=${broker:-broker}
@@ -660,7 +660,7 @@ notify_capacity() {
 }
 
 common_vars() {
-	echo broker capacity session logfile
+	echo broker capacity logfile
 }
 
 init_system_io() {
@@ -683,7 +683,7 @@ init_system_io() {
 	elif (( $((conn_count++)) < ${max_conn_count:-1} )); then
 		return 0
 	fi
-	log "max number of sessions is reached"
+	log "max number of connections is reached"
 	return 16
 }
 

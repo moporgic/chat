@@ -362,7 +362,7 @@ notify_state() {
 }
 
 common_vars() {
-	echo broker worker capacity observe_capacity session logfile
+	echo broker worker capacity observe_capacity logfile
 }
 
 init_system_io() {
@@ -385,7 +385,7 @@ init_system_io() {
 	elif (( $((conn_count++)) < ${max_conn_count:-1} )); then
 		return 0
 	fi
-	log "max number of sessions is reached"
+	log "max number of connections is reached"
 	return 16
 }
 
