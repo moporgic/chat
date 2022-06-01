@@ -1,7 +1,7 @@
 #!/bin/bash
 
 worker_main() {
-	log "worker version 2022-05-31 (protocol 0)"
+	log "worker version 2022-06-01 (protocol 0)"
 	for var in "$@"; do declare "$var" 2>/dev/null; done
 
 	broker=${broker:-broker}
@@ -20,7 +20,7 @@ worker_main() {
 	list_args "$@" $(common_vars) | while IFS= read -r opt; do log "option: $opt"; done
 	list_envinfo | while IFS= read -r info; do log "platform $info"; done
 
-	while init_system_io "$@"; do
+	while init_system_io "$@" && init_system_fd "$@"; do
 		worker_routine "$@"
 		local code=$?
 		(( $code < 16 )) && break
@@ -54,7 +54,8 @@ worker_routine() {
 					cmd[$id]=$command
 					echo "$requester << accept request $id"
 					log "accept request $id {$command} from $requester"
-					execute $id &
+					log "execute request $id {${cmd[$id]}}..."
+					execute $id >&${res_fd} {res_fd}>&- &
 					pid[$id]=$!
 				else
 					echo "$requester << reject request $id"
@@ -295,6 +296,12 @@ worker_routine() {
 		else
 			log "ignore message: $message"
 		fi
+
+		while (( ${#cmd[@]} )) && fetch_response; do
+			id=($response); id=${id[1]}
+			log "complete $response and forward it to ${own[$id]}"
+			echo "${own[$id]} << $response"
+		done
 	done
 
 	log "message input is terminated, chat system is down?"
@@ -303,14 +310,31 @@ worker_routine() {
 
 execute() {
 	local id=$1
-	log "execute request $id {${cmd[$id]}}"
 	local output=$(eval "${cmd[$id]}" 2>&1)
 	local code=$?
 	# drop ASCII terminal color codes then escape '\' '\n' '\t' with '\'
 	output=$(echo -n "$output" | sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
 	         sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]')
-	log "complete response $id $code {$output} and forward it to ${own[$id]}"
-	echo "${own[$id]} << response $id $code {$output}"
+	echo "response $id $code {$output}"
+}
+
+fetch_response() {
+	local input_buffer code
+	IFS= read -r -t 0.001 -u ${res_fd} input_buffer
+	code=$?
+	response=$input_buffer
+	while (( ${#response} )) && (( $code >= 128 )); do
+		IFS= read -r -t 1 -u ${res_fd} input_buffer
+		response+=$input_buffer
+		code=$?
+	done
+	return $code
+}
+
+init_system_fd() {
+	[[ ${res_fd} ]] || exec {res_fd}<> <(:) && return 0
+	log "failed to initialize response pipe"
+	return 16
 }
 
 observe_capacity() {
