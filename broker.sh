@@ -63,7 +63,7 @@ broker_routine() {
 					[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]} || pfz=$default_workers
 					if (( $tmz )); then
 						tmout[$id]=$tmz
-						tmdue[$id]=$(($(date +%s)+$tmz))
+						tmdue[$id]=$(($(date +%s%3N)+$tmz))
 						with+=${with:+ }timeout=$tmz
 					fi
 					if [[ $pfz ]]; then
@@ -179,7 +179,7 @@ broker_routine() {
 						if [ "$type" == "request" ]; then
 							unset assign[$id]
 						elif [ "$type" == "response" ]; then
-							[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s)+${tmout[$id]}))
+							[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
 							echo "$requester << accept request $id {${cmd[$id]}}"
 						fi
 						if [ "$type" != "terminate" ]; then
@@ -556,11 +556,12 @@ broker_routine() {
 			fi
 
 		elif ! [ "$message" ]; then
-			current=$(date +%s)
+			current=$(date +%s%3N)
 			for id in ${!tmdue[@]}; do
 				if (( $current > ${tmdue[$id]} )); then
+					due=${tmdue[$id]}
 					log "request $id failed due to timeout" \
-					    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${tmdue[$id]})), notify ${own[$id]}"
+					    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), notify ${own[$id]}"
 					if [[ -v assign[$id] ]]; then
 						echo "${assign[$id]} << terminate $id"
 						log "terminate assigned request $id on ${assign[$id]}"
@@ -715,7 +716,7 @@ erase_from() {
 
 input() {
 	local input_buffer code
-	IFS= read -r -t ${system_tick:-1} input_buffer
+	IFS= read -r -t ${system_tick:-0.1} input_buffer
 	code=$?
 	if [ $code == 0 ]; then
 		message=${message_buffer}${input_buffer}
