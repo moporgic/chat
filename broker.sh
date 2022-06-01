@@ -664,6 +664,7 @@ common_vars() {
 }
 
 init_system_io() {
+	trap - SIGPIPE
 	conn_count=${conn_count:-0}
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		local addr=${BASH_REMATCH[1]}
