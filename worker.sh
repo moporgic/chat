@@ -309,9 +309,10 @@ worker_routine() {
 }
 
 execute() {
-	local id=$1
-	local output=$(eval "${cmd[$id]}" 2>&1)
-	local code=$?
+	local id output code
+	id=$1
+	output=$(eval "${cmd[$id]}" 2>&1)
+	code=$?
 	# drop ASCII terminal color codes then escape '\' '\n' '\t' with '\'
 	output=$(echo -n "$output" | sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
 	         sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]')
