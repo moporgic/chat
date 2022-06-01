@@ -114,7 +114,7 @@ worker_routine() {
 				if [ "${own[$id]}" == "$who" ]; then
 					echo "$who << accept terminate $id"
 					log "accept terminate $id from $who"
-					if kill ${pid[$id]}; then
+					if kill ${pid[$id]} 2>/dev/null; then
 						log "request $id {${cmd[$id]}} with pid ${pid[$id]} has been terminated successfully"
 					fi
 					unset own[$id] cmd[$id] pid[$id]
@@ -320,15 +320,8 @@ execute() {
 
 fetch_response() {
 	local input_buffer code
-	IFS= read -r -t 0.001 -u ${res_fd} input_buffer
-	code=$?
-	response=$input_buffer
-	while (( ${#response} )) && (( $code >= 128 )); do
-		IFS= read -r -t 1 -u ${res_fd} input_buffer
-		response+=$input_buffer
-		code=$?
-	done
-	return $code
+	IFS= read -r -t 0 -u ${res_fd} response && IFS= read -r -u ${res_fd} response
+	return $?
 }
 
 init_system_fd() {
