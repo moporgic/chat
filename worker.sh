@@ -411,7 +411,7 @@ erase_from() {
 
 input() {
 	local input_buffer code
-	IFS= read -r -t ${system_tick:-1} input_buffer
+	IFS= read -r -t ${system_tick:-0.1} input_buffer
 	code=$?
 	if [ $code == 0 ]; then
 		message=${message_buffer}${input_buffer}
