@@ -114,8 +114,11 @@ worker_routine() {
 				if [ "${own[$id]}" == "$who" ]; then
 					echo "$who << accept terminate $id"
 					log "accept terminate $id from $who"
-					if kill ${pid[$id]} 2>/dev/null; then
-						log "request $id {${cmd[$id]}} with pid ${pid[$id]} has been terminated successfully"
+					cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
+					if [[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null; then
+						log "request $id {${cmd[$id]}} with pid $cmd_pid has been terminated successfully"
+					else
+						log "request $id {${cmd[$id]}} is already terminated"
 					fi
 					unset own[$id] cmd[$id] pid[$id]
 					observe_state && notify_state
