@@ -27,6 +27,9 @@ broker_main() {
 	list_args "$@" $(common_vars) | while IFS= read -r opt; do log "option: $opt"; done
 	list_envinfo | while IFS= read -r info; do log "platform $info"; done
 
+	trap 'log "${broker:-broker} has been interrupted"; exit 64' INT
+	trap 'log "${broker:-broker} has been terminated"; exit 64' TERM
+
 	while init_system_io "$@"; do
 		broker_routine "$@"
 		local code=$?
