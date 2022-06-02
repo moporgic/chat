@@ -59,16 +59,24 @@ broker_routine() {
 					own[$id]=$requester
 					cmd[$id]=$command
 					unset with tmz pfz
-					[[ $options =~ timeout=([0-9]+) ]] && tmz=${BASH_REMATCH[1]} || tmz=$default_timeout
+					[[ $options =~ timeout=([0-9]+.*) ]] && tmz=${BASH_REMATCH[1]} || tmz=$default_timeout
 					[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]} || pfz=$default_workers
-					if (( $tmz )); then
+					if [[ ${tmz:-0} != 0* ]]; then
+						with+=${with:+ }timeout=$tmz
+						[[ $tmz =~ ^([0-9]+)([^0-9]*)$ ]]
+						tmz=${BASH_REMATCH[1]}
+						case "${BASH_REMATCH[2]}" in
+							h*) tmz=$((tmz*3600))000; ;;
+							ms) :; ;;
+							m*) tmz=$((tmz*60))000; ;;
+							*)  tmz=${tmz}000; ;;
+						esac
 						tmout[$id]=$tmz
 						tmdue[$id]=$(($(date +%s%3N)+$tmz))
-						with+=${with:+ }timeout=$tmz
 					fi
 					if [[ $pfz ]]; then
-						prefer[$id]=$pfz
 						with+=${with:+ }prefer=$pfz
+						prefer[$id]=$pfz
 					fi
 					queue+=($id)
 					echo "$requester << accept request $id {$command}"
