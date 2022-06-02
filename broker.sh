@@ -9,9 +9,6 @@ broker_main() {
 	default_timeout=${default_timeout:-0}
 	default_workers=${default_workers}
 
-	session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
-	logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
-
 	declare -A own # [id]=requester
 	declare -A cmd # [id]=command
 	declare -A res # [id]=code:output
@@ -774,6 +771,19 @@ list_envinfo() (
 	echo "RAM: $(printf "%.1fG" $size)"
 )
 
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" | tee -a $logfile >&2; }
+init_logfile() {
+	for var in "$@"; do declare "$var" 2>/dev/null; done
+	declare -g session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
+	declare -g logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
+	exec 3>> $logfile
+	if flock -xn 3; then
+		trap 'code=$?; flock -u 3; exit $code' EXIT
+		exec 2> >(trap '' INT TERM; tee /dev/fd/2 >&3)
+	fi
+}
 
-broker_main "$@" # script main routine
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
+
+#### script main routine ####
+init_logfile "$@"
+broker_main "$@"
