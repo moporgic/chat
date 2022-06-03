@@ -1,7 +1,7 @@
 #!/bin/bash
 
 broker_main() {
-	log "broker version 2022-06-01 (protocol 0)"
+	log "broker version 2022-06-03 (protocol 0)"
 	for var in "$@"; do declare "$var" 2>/dev/null; done
 
 	broker=${broker:-broker}
@@ -51,10 +51,17 @@ broker_routine() {
 	while input; do
 		if [[ $message =~ $regex_request ]]; then
 			requester=${BASH_REMATCH[1]}
-			id=${BASH_REMATCH[4]:-${id_next:-1}}; id_next=$((id+1))
+			id=${BASH_REMATCH[4]}
 			command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
 			options=${BASH_REMATCH[7]}
 			if (( ${#cmd[@]} < ${capacity:-65536} )); then
+				if [[ $id ]]; then
+					reply="$id"
+				else
+					id=${id_next:-1}
+					while [[ -v own[$id] ]]; do id=$((id+1)); done
+					reply="$id {$command}"
+				fi
 				if ! [[ -v own[$id] ]]; then
 					own[$id]=$requester
 					cmd[$id]=$command
@@ -65,7 +72,7 @@ broker_routine() {
 						with+=${with:+ }timeout=$tmz
 						[[ $tmz =~ ^([0-9]+)([^0-9]*)$ ]]
 						tmz=${BASH_REMATCH[1]}
-						case "${BASH_REMATCH[2]}" in
+						case ${BASH_REMATCH[2]:-s} in
 							h*) tmz=$((tmz*3600))000; ;;
 							ms) :; ;;
 							m*) tmz=$((tmz*60))000; ;;
@@ -79,16 +86,17 @@ broker_routine() {
 						prefer[$id]=$pfz
 					fi
 					queue+=($id)
-					echo "$requester << accept request $id {$command}"
+					id_next=$((id+1))
+					echo "$requester << accept request $reply"
 					log "accept request $id {$command} ${with:+with ${with// /,} }from $requester and" \
 					    "enqueue $id, queue = ($(list_omit ${queue[@]}))"
 				else
-					echo "$requester << reject request $id {$command}"
+					echo "$requester << reject request $reply"
 					log "reject request $id {$command} from $requester since id $id has been occupied"
 				fi
 			else
-				echo "$requester << reject request {$command}"
-				log "reject request {$command} from $requester due to capacity," \
+				echo "$requester << reject request ${id:-{$command}}"
+				log "reject request ${id:+$id }{$command} from $requester due to capacity," \
 				    "#cmd = ${#cmd[@]}, queue = ($(list_omit ${queue[@]}))"
 			fi
 
@@ -188,7 +196,7 @@ broker_routine() {
 							unset assign[$id]
 						elif [ "$type" == "response" ]; then
 							[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
-							echo "$requester << accept request $id {${cmd[$id]}}"
+							echo "$requester << accept request $id"
 						fi
 						if [ "$type" != "terminate" ]; then
 							queue=($id ${queue[@]})
@@ -673,7 +681,6 @@ common_vars() {
 }
 
 init_system_io() {
-	trap - SIGPIPE
 	conn_count=${conn_count:-0}
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		local addr=${BASH_REMATCH[1]}

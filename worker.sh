@@ -1,7 +1,7 @@
 #!/bin/bash
 
 worker_main() {
-	log "worker version 2022-06-01 (protocol 0)"
+	log "worker version 2022-06-03 (protocol 0)"
 	for var in "$@"; do declare "$var" 2>/dev/null; done
 
 	broker=${broker:-broker}
@@ -44,26 +44,34 @@ worker_routine() {
 	while input; do
 		if [[ $message =~ $regex_request ]]; then
 			requester=${BASH_REMATCH[1]}
-			id=${BASH_REMATCH[4]:-${id_next:-1}}; id_next=$((id+1))
+			id=${BASH_REMATCH[4]}
 			command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
 			options=${BASH_REMATCH[7]}
 			observe_state
 			if [ "$state" == "idle" ]; then
+				if [[ $id ]]; then
+					reply="$id"
+				else
+					id=${id_next:-1}
+					while [[ -v own[$id] ]]; do id=$((id+1)); done
+					reply="$id {$command}"
+				fi
 				if ! [[ -v own[$id] ]]; then
 					own[$id]=$requester
 					cmd[$id]=$command
-					echo "$requester << accept request $id"
+					id_next=$((id+1))
+					echo "$requester << accept request $reply"
 					log "accept request $id {$command} from $requester"
 					log "execute request $id {${cmd[$id]}}..."
 					execute $id >&${res_fd} {res_fd}>&- &
 					pid[$id]=$!
 				else
-					echo "$requester << reject request $id"
+					echo "$requester << reject request $reply"
 					log "reject request $id {$command} from $requester since id $id has been occupied"
 				fi
 			else
-				echo "$requester << reject request $id"
-				log "reject request $id {$command} from $requester due to busy state, #cmd = ${#cmd[@]}"
+				echo "$requester << reject request ${id:-{$command}}"
+				log "reject request ${id:+$id }{$command} from $requester due to busy state, #cmd = ${#cmd[@]}"
 			fi
 			observe_state && notify_state
 
@@ -363,7 +371,6 @@ common_vars() {
 }
 
 init_system_io() {
-	trap - SIGPIPE
 	conn_count=${conn_count:-0}
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		local addr=${BASH_REMATCH[1]}
