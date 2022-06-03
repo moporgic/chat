@@ -44,7 +44,7 @@ broker_routine() {
 	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
 	local regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
 	local regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
-	local regex_worker_state="^(\S+) >> state (idle|busy) (\S+/\S+)$"
+	local regex_worker_state="^(\S+) >> state (idle|busy) (\S+/\S+)( \((.*)\))?$"
 	local regex_others="^(\S+) >> (query|terminate|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
 	local regex_chat_system="^(#|%) (.+)$"
 
