@@ -302,11 +302,7 @@ broker_routine() {
 				elif [[ "$message" == "name"* ]]; then
 					log "registered as $broker successfully"
 					if [ "$workers" ]; then
-						workers=(${workers[@]//:/ })
-						for worker in ${workers[@]}; do
-							echo "$worker << query state"
-						done
-						log "query states from ${workers[@]}"
+						contact_workers ${workers[@]//:/ }
 					fi
 				elif [[ "$message" == "failed name"* ]]; then
 					log "another $broker is already running? shutdown"
@@ -504,6 +500,8 @@ broker_routine() {
 				if [ "$var" == "broker" ]; then
 					log "broker name has been changed, register $broker on the chat system..."
 					echo "name $broker"
+				elif [ "$var" == "workers" ]; then
+					contact_workers ${workers[@]//:/ }
 				elif [ "$var" == "capacity" ]; then
 					notify_capacity
 				fi
@@ -522,6 +520,7 @@ broker_routine() {
 
 			elif [ "$command" == "operate" ]; then
 				regex_operate_power="^(shutdown|restart) ?(.*)$"
+				regex_contact_workers="^(contact) ?(.*)$"
 
 				if [[ "$options" =~ $regex_operate_power ]]; then
 					type=${BASH_REMATCH[1]}
@@ -551,6 +550,25 @@ broker_routine() {
 						fi
 					fi
 					unset targets
+
+				elif [[ "$options" =~ $regex_contact_workers ]]; then
+					type=${BASH_REMATCH[1]}
+					workers=( $(<<<${BASH_REMATCH[2]:-"*"} grep -Eo '\S+' | while IFS= read -r match; do
+						for client in ${!state[@]}; do
+							[[ $client == $match ]] && echo $client
+						done
+					done) )
+
+					if (( ${#workers[@]} )); then
+						log "accept operate $type ${workers[@]} from $name"
+						for worker in ${workers[@]}; do
+							echo "$name << confirm $type $worker"
+							contact_workers $worker
+						done
+					else
+						log "reject operate $type from $name"
+					fi
+
 				else
 					log "ignore $command $options from $name"
 				fi
@@ -674,6 +692,14 @@ notify_capacity() {
 		done
 		log "capacity has been changed, notify ${notify[capacity]}"
 	fi
+}
+
+contact_workers() {
+	local workers=(${@:-${!state[@]}}) worker
+	for worker in ${workers[@]}; do
+		echo "$worker << report state"
+	done
+	log "contact ${workers[@]} for worker state"
 }
 
 common_vars() {

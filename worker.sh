@@ -38,7 +38,7 @@ worker_routine() {
 	local regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
 	local regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (.+)$"
 	local regex_terminate="^(\S+) >> terminate (\S+)$"
-	local regex_others="^(\S+) >> (operate|shell|set|unset|use|query) (.+)$"
+	local regex_others="^(\S+) >> (operate|shell|set|unset|use|query|report) (.+)$"
 	local regex_chat_system="^(#|%) (.+)$"
 
 	while input; do
@@ -189,10 +189,21 @@ worker_routine() {
 			command=${BASH_REMATCH[2]}
 			options=${BASH_REMATCH[3]}
 
-			if [ "$command" == "query" ]; then
+			if [ "$command" == "report" ]; then
 				if [ "$options" == "state" ]; then
-					log "accept query state from $name"
+					log "accept report state from $name"
 					notify_state $name
+				elif [ "$options" == "state with requests" ]; then
+					log "accept report state with requests from $name"
+					notify_state_with_requests $name
+				else
+					log "ignore $command $options from $name"
+				fi
+
+			elif [ "$command" == "query" ]; then
+				if [ "$options" == "state" ]; then
+					echo "$name << state = ${state[@]}"
+					log "accept query state from $name, state = ${state[@]}"
 
 				elif [ "$options" == "capacity" ]; then
 					current_capacity=${capacity:-$(observe_capacity)}
@@ -370,8 +381,15 @@ observe_state() {
 }
 
 notify_state() {
-	echo "${1:-$broker} << state ${state[@]}"
-	log "state ${state[@]}; notify ${1:-$broker}"
+	local who=${1:-$broker}
+	echo "$who << state ${state[@]}"
+	log "state ${state[@]}; notify $who"
+}
+
+notify_state_with_requests() {
+	local who=${1:-$broker}
+	echo "$who << state ${state[@]} (${!cmd[@]})"
+	log "state ${state[@]} (${!cmd[@]}); notify $who"
 }
 
 common_vars() {
