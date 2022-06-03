@@ -81,8 +81,16 @@ worker_routine() {
 			id=${BASH_REMATCH[3]}
 			if [[ -v own[$id] ]]; then
 				if [ "${own[$id]}" == "$who" ]; then
-					unset own[$id] cmd[$id] pid[$id]
 					log "confirm that $who ${confirm}ed response $id"
+					if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
+						unset own[$id] cmd[$id] pid[$id]
+					elif [ "$confirm" == "reject" ]; then
+						unset pid[$id]
+						echo "$who << accept request $id"
+						log "execute request $id {${cmd[$id]}}..."
+						execute $id >&${res_fd} {res_fd}>&- &
+						pid[$id]=$!
+					fi
 					observe_state && notify_state
 				else
 					log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
