@@ -41,7 +41,7 @@ broker_routine() {
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
 
-	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
+	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$"
 	local regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
 	local regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
 	local regex_worker_state="^(\S+) >> state (idle|busy) (\S+/\S+)( \((.*)\))?$"
@@ -52,8 +52,8 @@ broker_routine() {
 		if [[ $message =~ $regex_request ]]; then
 			requester=${BASH_REMATCH[1]}
 			id=${BASH_REMATCH[4]}
-			command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
-			options=${BASH_REMATCH[7]}
+			command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
+			options=${BASH_REMATCH[8]}
 			if (( ${#cmd[@]} < ${capacity:-65536} )); then
 				if [[ $id ]]; then
 					reply="$id"
@@ -95,7 +95,7 @@ broker_routine() {
 					log "reject request $id {$command} from $requester since id $id has been occupied"
 				fi
 			else
-				echo "$requester << reject request ${id:-{$command}}"
+				echo "$requester << reject request ${id:-\{$command\}}"
 				log "reject request ${id:+$id }{$command} from $requester due to capacity," \
 				    "#cmd = ${#cmd[@]}, queue = ($(list_omit ${queue[@]}))"
 			fi

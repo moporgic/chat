@@ -34,7 +34,7 @@ worker_routine() {
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
 
-	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with ([^{}]*))?|(.+))$"
+	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$"
 	local regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
 	local regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (.+)$"
 	local regex_terminate="^(\S+) >> terminate (\S+)$"
@@ -45,8 +45,8 @@ worker_routine() {
 		if [[ $message =~ $regex_request ]]; then
 			requester=${BASH_REMATCH[1]}
 			id=${BASH_REMATCH[4]}
-			command=${BASH_REMATCH[5]:-${BASH_REMATCH[8]}}
-			options=${BASH_REMATCH[7]}
+			command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
+			options=${BASH_REMATCH[8]}
 			observe_state
 			if [ "$state" == "idle" ]; then
 				if [[ $id ]]; then
@@ -70,7 +70,7 @@ worker_routine() {
 					log "reject request $id {$command} from $requester since id $id has been occupied"
 				fi
 			else
-				echo "$requester << reject request ${id:-{$command}}"
+				echo "$requester << reject request ${id:-\{$command\}}"
 				log "reject request ${id:+$id }{$command} from $requester due to busy state, #cmd = ${#cmd[@]}"
 			fi
 			observe_state && notify_state
