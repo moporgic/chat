@@ -176,10 +176,14 @@ worker_routine() {
 					log "make handshake (protocol 0) with $broker..."
 					echo "$broker << use protocol 0"
 				elif [[ "$info" == "failed name"* ]]; then
-					occupied=$worker
-					worker=${worker%-*}-$((${worker##*-}+1))
-					echo "name $worker"
-					log "name $occupied has been occupied, try register $worker on the chat system..."
+					log "name $worker has been occupied, query online names..."
+					echo "who"
+				elif [[ "$info" == "who: "* ]] && [ "$state" == "init" ]; then
+					while [[ " ${info:5} " == *" $worker "* ]]; do
+						worker=${worker%-*}-$((${worker##*-}+1))
+					done
+					log "register worker on the chat system..."
+					echo "name ${worker:=worker-1}"
 				elif [[ "$info" == "failed chat"* ]]; then
 					log "$broker disconnected? wait until $broker come back..."
 				fi
