@@ -13,7 +13,7 @@ worker_main() {
 	declare -A cmd # [id]=command
 	declare -A res # [id]=code:output
 	declare -A pid # [id]=PID
-	declare state=init # (idle|busy #cmd/capacity)
+	declare state # (idle|busy #cmd/capacity)
 
 	list_args "$@" $(common_vars) | while IFS= read -r opt; do log "option: $opt"; done
 	list_envinfo | while IFS= read -r info; do log "platform $info"; done
@@ -32,6 +32,9 @@ worker_main() {
 }
 
 worker_routine() {
+	state=init
+	linked=
+
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
 
@@ -48,7 +51,7 @@ worker_routine() {
 			id=${BASH_REMATCH[4]}
 			command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
 			options=${BASH_REMATCH[8]}
-			observe_state
+
 			if [ "$state" == "idle" ]; then
 				if [[ $id ]]; then
 					reply="$id"
@@ -70,16 +73,17 @@ worker_routine() {
 					echo "$requester << reject request $reply"
 					log "reject request $id {$command} from $requester since id $id has been occupied"
 				fi
+				refresh_state
 			else
 				echo "$requester << reject request ${id:-\{$command\}}"
-				log "reject request ${id:+$id }{$command} from $requester due to busy state, #cmd = ${#cmd[@]}"
+				log "reject request ${id:+$id }{$command} from $requester due to $state state, #cmd = ${#cmd[@]}"
 			fi
-			observe_state && notify_state
 
 		elif [[ $message =~ $regex_confirm_response ]]; then
 			who=${BASH_REMATCH[1]}
 			confirm=${BASH_REMATCH[2]}
 			id=${BASH_REMATCH[3]}
+
 			if [[ -v own[$id] ]]; then
 				if [ "${own[$id]}" == "$who" ]; then
 					log "confirm that $who ${confirm}ed response $id"
@@ -92,7 +96,7 @@ worker_routine() {
 						execute $id >&${res_fd} {res_fd}>&- &
 						pid[$id]=$!
 					fi
-					observe_state && notify_state
+					refresh_state
 				else
 					log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
 				fi
@@ -112,6 +116,7 @@ worker_routine() {
 			elif [ "$who $what" == "$broker protocol" ]; then
 				if [ "$confirm" == "accept" ]; then
 					log "handshake with $broker successfully"
+					linked=$broker
 					observe_state; notify_state
 
 				elif [ "$confirm" == "reject" ]; then
@@ -138,7 +143,7 @@ worker_routine() {
 						log "request $id {${cmd[$id]}} is already terminated"
 					fi
 					unset own[$id] cmd[$id] res[$id] pid[$id]
-					observe_state && notify_state
+					refresh_state
 				else
 					echo "$who << reject terminate $id"
 					log "reject terminate $id from $who since it is owned by ${own[$id]}"
@@ -160,6 +165,7 @@ worker_routine() {
 					name=${BASH_REMATCH[1]}
 					if [ "$name" == "$broker" ]; then
 						log "$broker disconnected, wait until $broker come back..."
+						linked=
 
 					elif [[ " ${own[@]} " == *" $name "* ]] && ! [ "${keep_unowned_tasks}" ]; then
 						log "$name logged out"
@@ -188,6 +194,7 @@ worker_routine() {
 					fi
 					if [ "$old_name" == "$broker" ]; then
 						broker=$new_name
+						linked=
 						log "broker has been changed, make handshake (protocol 0) with $broker again..."
 						echo "$broker << use protocol 0"
 					fi
@@ -207,19 +214,26 @@ worker_routine() {
 					return 1
 				elif [[ "$info" == "name"* ]]; then
 					log "registered as $worker successfully"
+					observe_state
 					log "make handshake (protocol 0) with $broker..."
 					echo "$broker << use protocol 0"
 				elif [[ "$info" == "failed name"* ]]; then
 					log "name $worker has been occupied, query online names..."
 					echo "who"
-				elif [[ "$info" == "who: "* ]] && [ "$state" == "init" ]; then
-					while [[ " ${info:5} " == *" $worker "* ]]; do
-						worker=${worker%-*}-$((${worker##*-}+1))
-					done
-					log "register worker on the chat system..."
-					echo "name ${worker:=worker-1}"
+				elif [[ "$info" == "who: "* ]]; then
+					if [ "$state" == "init" ]; then
+						while [[ " ${info:5} " == *" $worker "* ]]; do
+							worker=${worker%-*}-$((${worker##*-}+1))
+						done
+						log "register worker on the chat system..."
+						echo "name ${worker:=worker-1}"
+					elif [[ " ${info:5} " != *" $broker "* ]]; then
+						log "$broker disconnected, wait until $broker come back..."
+						linked=
+					fi
 				elif [[ "$info" == "failed chat"* ]]; then
-					log "$broker disconnected? wait until $broker come back..."
+					echo "who"
+					log "failed chat, query online names..."
 				fi
 			fi
 
@@ -323,6 +337,7 @@ worker_routine() {
 					for id in ${!own[@]}; do
 						[ "${own[$id]}" == "$val_old" ] && own[$id]=$broker
 					done
+					linked=
 					log "broker has been changed, make handshake (protocol 0) with $broker again..."
 					echo "$broker << use protocol 0"
 				elif [ "$var" == "worker" ]; then
@@ -331,9 +346,9 @@ worker_routine() {
 				elif [ "$var" == "capacity" ] || [ "$var" == "observe_capacity" ]; then
 					[[ ${capacity-$(nproc)} =~ ^([0-9]+)|(.+)$ ]] && capacity=${BASH_REMATCH[1]}
 					observe_capacity=${observe_capacity:-${BASH_REMATCH[2]:-capacity.sh}}
-					observe_state && notify_state
+					refresh_state
 				elif [ "$var" == "state" ]; then
-					notify_state
+					[[ $linked ]] && notify_state
 				fi
 
 			elif [ "$command" == "unset" ]; then
@@ -381,9 +396,7 @@ worker_routine() {
 			fi
 
 		elif ! [ "$message" ]; then
-			if [ "$state" != "init" ]; then
-				observe_state && notify_state
-			fi
+			refresh_state
 
 		else
 			log "ignore message: $message"
@@ -459,6 +472,10 @@ notify_state_with_requests() {
 	local who=${1:-$broker}
 	echo "$who << state ${state[@]} (${!cmd[@]})"
 	log "state ${state[@]} (${!cmd[@]}); notify $who"
+}
+
+refresh_state() {
+	[ "$state" != "init" ] && observe_state && [[ $linked ]] && notify_state
 }
 
 common_vars() {
