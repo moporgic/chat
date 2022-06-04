@@ -223,16 +223,7 @@ broker_routine() {
 					name=${BASH_REMATCH[1]}
 					log "$name logged out"
 					if [[ -v state[$name] ]]; then
-						unset state[$name]
-						log "discard the worker state of $name"
-						for id in ${!assign[@]}; do
-							if [ "${assign[$id]}" == "$name" ]; then
-								unset assign[$id]
-								queue=($id ${queue[@]})
-								log "revoke assigned request $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
-							fi
-						done
-						notify_capacity
+						discard_worker $name
 					fi
 					for id in ${!own[@]}; do
 						if [ "${own[$id]}" == "$name" ] && ! [ "${keep_unowned_tasks}" ]; then
@@ -521,11 +512,12 @@ broker_routine() {
 
 			elif [ "$command" == "operate" ]; then
 				regex_operate_power="^(shutdown|restart) ?(.*)$"
-				regex_contact_workers="^(contact) ?(.*)$"
+				regex_operate_workers="^(contact|discard) ?(.*)$"
 
 				if [[ "$options" =~ $regex_operate_power ]]; then
 					type=${BASH_REMATCH[1]}
-					matches=( $(<<<${BASH_REMATCH[2]:-$broker} grep -Eo '\S+' | while IFS= read -r match; do
+					patt=${BASH_REMATCH[2]:-$broker}
+					matches=( $(<<<$patt grep -Eo '\S+' | while IFS= read -r match; do
 						for client in ${!state[@]} $broker; do
 							[[ $client == $match ]] && echo $client
 						done
@@ -552,22 +544,26 @@ broker_routine() {
 					fi
 					unset targets
 
-				elif [[ "$options" =~ $regex_contact_workers ]]; then
+				elif [[ "$options" =~ $regex_operate_workers ]]; then
 					type=${BASH_REMATCH[1]}
-					workers=( $(<<<${BASH_REMATCH[2]:-"*"} grep -Eo '\S+' | while IFS= read -r match; do
-						for client in ${!state[@]}; do
-							[[ $client == $match ]] && echo $client
-						done
-					done) )
+					patt=${BASH_REMATCH[2]:-"*"}
 
-					if (( ${#workers[@]} )); then
-						log "accept operate $type ${workers[@]} from $name"
+					if [ "$type" == "contact" ]; then
+						log "accept operate $type $patt from $name"
+						echo "$name << confirm $type $patt"
+						contact_workers "$patt"
+
+					elif [ "$type" == "discard" ]; then
+						log "accept operate $type $patt from $name"
+						workers=( $(<<<$patt grep -Eo '\S+' | while IFS= read -r match; do
+							for client in ${!state[@]}; do
+								[[ $client == $match ]] && echo $client
+							done
+						done) )
 						for worker in ${workers[@]}; do
 							echo "$name << confirm $type $worker"
-							contact_workers $worker
+							discard_worker $worker
 						done
-					else
-						log "reject operate $type from $name"
 					fi
 
 				else
@@ -696,11 +692,26 @@ notify_capacity() {
 }
 
 contact_workers() {
-	local workers=(${@:-${!state[@]}}) worker
-	for worker in ${workers[@]}; do
+	local worker
+	for worker in "$@"; do
 		echo "$worker << report state"
 	done
-	log "contact ${workers[@]} for worker state"
+	log "contact $@ for worker state"
+}
+
+
+discard_worker() {
+	local name=${1:?} id
+	unset state[$name]
+	log "discard the worker state of $name"
+	for id in ${!assign[@]}; do
+		if [ "${assign[$id]}" == "$name" ]; then
+			unset assign[$id]
+			queue=($id ${queue[@]})
+			log "revoke assigned request $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
+		fi
+	done
+	notify_capacity
 }
 
 common_vars() {
