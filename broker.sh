@@ -196,6 +196,7 @@ broker_routine() {
 							unset assign[$id]
 						elif [ "$type" == "response" ]; then
 							[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
+							unset res[$id]
 							echo "$requester << accept request $id"
 						fi
 						if [ "$type" != "terminate" ]; then

@@ -11,6 +11,7 @@ worker_main() {
 
 	declare -A own # [id]=requester
 	declare -A cmd # [id]=command
+	declare -A res # [id]=code:output
 	declare -A pid # [id]=PID
 	declare state=init # (idle|busy #cmd/capacity)
 
@@ -83,9 +84,9 @@ worker_routine() {
 				if [ "${own[$id]}" == "$who" ]; then
 					log "confirm that $who ${confirm}ed response $id"
 					if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
-						unset own[$id] cmd[$id] pid[$id]
+						unset own[$id] cmd[$id] res[$id] pid[$id]
 					elif [ "$confirm" == "reject" ]; then
-						unset pid[$id]
+						unset pid[$id] res[$id]
 						echo "$who << accept request $id"
 						log "execute request $id {${cmd[$id]}}..."
 						execute $id >&${res_fd} {res_fd}>&- &
@@ -136,7 +137,7 @@ worker_routine() {
 					else
 						log "request $id {${cmd[$id]}} is already terminated"
 					fi
-					unset own[$id] cmd[$id] pid[$id]
+					unset own[$id] cmd[$id] res[$id] pid[$id]
 					observe_state && notify_state
 				else
 					echo "$who << reject terminate $id"
@@ -220,18 +221,31 @@ worker_routine() {
 					ids=($(for id in ${ids[@]}; do [[ -v cmd[$id] ]] && echo $id; done))
 					echo "$name << jobs = (${ids[@]})"
 					for id in ${ids[@]}; do
-						echo "$name << # request $id {${cmd[$id]}} [${own[$id]}]"
+						if [[ -v res[$id] ]]; then
+							echo "$name << # $id {${cmd[$id]}} [${own[$id]}] = ${res[$id]%%:*} {${res[$id]#*:}}"
+						else
+							echo "$name << # $id {${cmd[$id]}} [${own[$id]}]"
+						fi
 					done
 					log "accept query jobs from $name, jobs = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(request|assign)s?(.*)$ ]] ; then
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
-					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$name" ] && [[ -v cmd[$id] ]] && echo $id; done))
+					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$name" ] && ! [[ -v res[$id] ]] && echo $id; done))
 					echo "$name << requests = (${ids[@]})"
 					for id in ${ids[@]}; do
 						echo "$name << # request $id {${cmd[$id]}}"
 					done
 					log "accept query requests from $name, requests = ($(list_omit ${ids[@]}))"
+
+				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
+					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
+					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$name" ] && [[ -v res[$id] ]] && echo $id; done))
+					echo "$name << responses = (${ids[@]})"
+					for id in ${ids[@]}; do
+						echo "$name << # response $id ${res[$id]%%:*} {${res[$id]#*:}}"
+					done
+					log "accept query responses from $name, responses = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
 					opts=($(list_args ${BASH_REMATCH[2]:-"$@" $(common_vars) ${set_var[@]}}))
@@ -327,10 +341,14 @@ worker_routine() {
 			log "ignore message: $message"
 		fi
 
-		while (( ${#cmd[@]} )) && fetch_response response; do
-			id=($response); id=${id[1]}
-			log "complete $response and forward it to ${own[$id]}"
-			echo "${own[$id]} << $response"
+		while (( ${#cmd[@]} )) && fetch_response; do
+			if [[ -v cmd[$id] ]] && [[ -v own[$id] ]]; then
+				res[$id]=$code:$output
+				log "complete response $id $code {$output} and forward it to ${own[$id]}"
+				echo "${own[$id]} << response $id $code {$output}"
+			else
+				log "complete orphan response $id $code {$output}"
+			fi
 		done
 	done
 
@@ -350,7 +368,11 @@ execute() {
 }
 
 fetch_response() {
-	read -r -t 0 -u ${res_fd} && IFS= read -r -u ${res_fd} ${1:-response}
+	local response
+	read -r -t 0 -u ${res_fd} && IFS= read -r -u ${res_fd} response || return $?
+	IFS=' ' read -r response id code output <<< $response || return $?
+	[ "${output:0:1}${response}${output: -1}" == "{response}" ] || return $?
+	output=${output:1:${#output}-2}
 	return $?
 }
 
