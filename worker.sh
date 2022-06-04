@@ -153,16 +153,50 @@ worker_routine() {
 			info=${BASH_REMATCH[2]}
 
 			if [ "$type" == "#" ]; then
-				if [ "$info" == "logout: $broker" ]; then
-					log "$broker disconnected, wait until $broker come back..."
-				elif [[ "$info" == "name: $broker becomes "* ]]; then
-					broker=${info##* }
-					log "broker has been changed, make handshake (protocol 0) with $broker again..."
-					echo "$broker << use protocol 0"
+				regex_logout="^logout: (\S+)$"
+				regex_rename="^name: (\S+) becomes (\S+)$"
+
+				if [[ $info =~ $regex_logout ]]; then
+					name=${BASH_REMATCH[1]}
+					if [ "$name" == "$broker" ]; then
+						log "$broker disconnected, wait until $broker come back..."
+
+					elif [[ " ${own[@]} " == *" $name "* ]] && ! [ "${keep_unowned_tasks}" ]; then
+						log "$name logged out"
+						for id in ${!own[@]}; do
+							[ "${own[$id]}" == "$name" ] || continue
+							if [[ -v res[$id] ]]; then
+								log "discard request $id and response $id"
+							elif [[ -v pid[$id] ]]; then
+								log "discard and terminate request $id"
+								cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
+								[[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null
+							fi
+							unset own[$id] cmd[$id] res[$id] pid[$id]
+						done
+					fi
+
+				elif [[ $message =~ $regex_rename ]]; then
+					old_name=${BASH_REMATCH[1]}
+					new_name=${BASH_REMATCH[2]}
+
+					if [[ " ${own[@]} " == *" $old_name "* ]]; then
+						log "$old_name renamed as $new_name"
+						for id in ${!own[@]}; do
+							[ "${own[$id]}" == "$old_name" ] && own[$id]=$new_name
+						done
+					fi
+					if [ "$old_name" == "$broker" ]; then
+						broker=$new_name
+						log "broker has been changed, make handshake (protocol 0) with $broker again..."
+						echo "$broker << use protocol 0"
+					fi
+
 				elif [ "$info" == "login: $broker" ] || [[ "$info" == "name: "*" becomes $broker" ]]; then
 					log "$broker connected, make handshake (protocol 0) with $broker..."
 					echo "$broker << use protocol 0"
 				fi
+
 			elif [ "$type" == "%" ]; then
 				if [[ "$info" == "protocol"* ]]; then
 					log "chat system protocol verified successfully"
@@ -201,6 +235,13 @@ worker_routine() {
 				elif [ "$options" == "state with requests" ]; then
 					log "accept report state with requests from $name"
 					notify_state_with_requests $name
+				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
+					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
+					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$name" ] && [[ -v res[$id] ]] && echo $id; done))
+					log "accept report responses from $name, responses = ($(list_omit ${ids[@]}))"
+					for id in ${ids[@]}; do
+						echo "$name << response $id ${res[$id]%%:*} {${res[$id]#*:}}"
+					done
 				else
 					log "ignore $command $options from $name"
 				fi
@@ -279,6 +320,9 @@ worker_routine() {
 				declare val_old="${!var}" $var="$val"
 				log "accept set ${var}${val:+=\"${val}\"} from $name"
 				if [ "$var" == "broker" ]; then
+					for id in ${!own[@]}; do
+						[ "${own[$id]}" == "$val_old" ] && own[$id]=$broker
+					done
 					log "broker has been changed, make handshake (protocol 0) with $broker again..."
 					echo "$broker << use protocol 0"
 				elif [ "$var" == "worker" ]; then
