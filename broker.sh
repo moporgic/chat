@@ -117,11 +117,11 @@ broker_routine() {
 					log "accept response $id $code {$output} from $worker but no such request"
 				fi
 			else
-				echo "$worker << reject response $id"
+				echo "$worker << accept response $id"
 				if [ "${assign[$id]}" ]; then
-					log "reject response $id $code {$output} from $worker since it is owned by ${assign[$id]}"
+					log "ignore response $id $code {$output} from $worker since it is owned by ${assign[$id]}"
 				else
-					log "reject response $id $code {$output} from $worker since no such assignment"
+					log "ignore response $id $code {$output} from $worker since no such assignment"
 				fi
 			fi
 
