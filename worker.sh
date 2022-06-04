@@ -1,7 +1,7 @@
 #!/bin/bash
 
 worker_main() {
-	log "worker version 2022-06-03 (protocol 0)"
+	log "worker version 2022-06-04 (protocol 0)"
 	for var in "$@"; do declare "$var" 2>/dev/null; done
 
 	broker=${broker:-broker}
@@ -41,7 +41,7 @@ worker_routine() {
 	local regex_others="^(\S+) >> (operate|shell|set|unset|use|query|report) (.+)$"
 	local regex_chat_system="^(#|%) (.+)$"
 
-	while input; do
+	while input message; do
 		if [[ $message =~ $regex_request ]]; then
 			requester=${BASH_REMATCH[1]}
 			id=${BASH_REMATCH[4]}
@@ -327,7 +327,7 @@ worker_routine() {
 			log "ignore message: $message"
 		fi
 
-		while (( ${#cmd[@]} )) && fetch_response; do
+		while (( ${#cmd[@]} )) && fetch_response response; do
 			id=($response); id=${id[1]}
 			log "complete $response and forward it to ${own[$id]}"
 			echo "${own[$id]} << $response"
@@ -350,8 +350,7 @@ execute() {
 }
 
 fetch_response() {
-	local input_buffer code
-	IFS= read -r -t 0 -u ${res_fd} response && IFS= read -r -u ${res_fd} response
+	read -r -t 0 -u ${res_fd} && IFS= read -r -u ${res_fd} ${1:-response}
 	return $?
 }
 
@@ -446,17 +445,14 @@ erase_from() {
 }
 
 input() {
-	local input_buffer code
-	IFS= read -r -t ${system_tick:-0.1} input_buffer
-	code=$?
-	if [ $code == 0 ]; then
-		message=${message_buffer}${input_buffer}
-		message_buffer=
+	if read -r -t 0; then
+		IFS= read -r ${1:-message}
+		return $?
 	else
-		message=
-		message_buffer+=${input_buffer}
+		sleep ${system_tick:-0.1}
+		eval ${1:-message}=
+		return 0
 	fi
-	return $(( $code < 128 ? $code : 0 ))
 }
 
 list_envinfo() (
