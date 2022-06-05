@@ -1,10 +1,10 @@
 #!/bin/bash
 
 worker_main() {
-	log "worker version 2022-06-04 (protocol 0)"
+	log "worker version 2022-06-05 (protocol 0)"
 	for var in "$@"; do declare "$var" 2>/dev/null; done
 
-	broker=${broker:-broker}
+	broker=${broker-broker}; broker=(${broker//:/ })
 	worker=${worker:-worker-1}
 	[[ ${capacity-$(nproc)} =~ ^([0-9]+)|(.+)$ ]] && capacity=${BASH_REMATCH[1]}
 	observe_capacity=${observe_capacity:-${BASH_REMATCH[2]:-capacity.sh}}
@@ -13,6 +13,7 @@ worker_main() {
 	declare -A cmd # [id]=command
 	declare -A res # [id]=code:output
 	declare -A pid # [id]=PID
+	declare -a linked # broker...
 	declare state # (idle|busy #cmd/capacity)
 
 	list_args "$@" $(common_vars) | while IFS= read -r opt; do log "option: $opt"; done
@@ -33,7 +34,7 @@ worker_main() {
 
 worker_routine() {
 	state=init
-	linked=
+	linked=()
 
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
@@ -110,14 +111,14 @@ worker_routine() {
 			what=${BASH_REMATCH[3]}
 			option=${BASH_REMATCH[4]}
 
-			if [ "$who $confirm $what" == "$broker confirm state" ]; then
-				log "$broker confirmed state $option"
+			if [ "$confirm $what" == "confirm state" ]; then
+				log "$who confirmed state $option"
 
-			elif [ "$who $what" == "$broker protocol" ]; then
+			elif [ "$what" == "protocol" ]; then
 				if [ "$confirm" == "accept" ]; then
-					log "handshake with $broker successfully"
-					linked=$broker
-					observe_state; notify_state
+					log "handshake with $who successfully"
+					linked=($(erase_from linked $who) $who)
+					observe_state; notify_state $who
 
 				elif [ "$confirm" == "reject" ]; then
 					log "handshake failed, unsupported protocol; shutdown"
@@ -158,50 +159,51 @@ worker_routine() {
 			info=${BASH_REMATCH[2]}
 
 			if [ "$type" == "#" ]; then
+				regex_login="^login: (\S+)$"
 				regex_logout="^logout: (\S+)$"
 				regex_rename="^name: (\S+) becomes (\S+)$"
 
 				if [[ $info =~ $regex_logout ]]; then
 					name=${BASH_REMATCH[1]}
-					if [ "$name" == "$broker" ]; then
-						log "$broker disconnected, wait until $broker come back..."
-						linked=
+					if [[ " ${linked[@]} " == *" $name "* ]]; then
+						log "$name disconnected, wait until $name come back..."
+						linked=($(erase_from linked $name))
 
 					elif [[ " ${own[@]} " == *" $name "* ]] && ! [ "${keep_unowned_tasks}" ]; then
 						log "$name logged out"
 						for id in ${!own[@]}; do
-							[ "${own[$id]}" == "$name" ] || continue
-							if [[ -v res[$id] ]]; then
-								log "discard request $id and response $id"
-							elif [[ -v pid[$id] ]]; then
-								log "discard and terminate request $id"
-								cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
-								[[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null
-							fi
-							unset own[$id] cmd[$id] res[$id] pid[$id]
+							[ "${own[$id]}" == "$name" ] && discard_owned_asset $id
 						done
 					fi
 
-				elif [[ $message =~ $regex_rename ]]; then
+				elif [[ $info =~ $regex_rename ]]; then
 					old_name=${BASH_REMATCH[1]}
 					new_name=${BASH_REMATCH[2]}
 
 					if [[ " ${own[@]} " == *" $old_name "* ]]; then
-						log "$old_name renamed as $new_name"
+						log "$old_name renamed as $new_name, transfer ownerships..."
 						for id in ${!own[@]}; do
 							[ "${own[$id]}" == "$old_name" ] && own[$id]=$new_name
 						done
 					fi
-					if [ "$old_name" == "$broker" ]; then
-						broker=$new_name
-						linked=
-						log "broker has been changed, make handshake (protocol 0) with $broker again..."
-						echo "$broker << use protocol 0"
+					if [[ " ${linked[@]} " == *" $old_name "* ]]; then
+						broker=($(erase_from broker $old_name))
+						linked=($(erase_from linked $old_name))
+						log "$old_name renamed as $new_name, make handshake (protocol 0) with $new_name again..."
+						echo "$new_name << use protocol 0"
+					fi
+					if [[ " ${broker[@]} " == *" $new_name "* ]]; then
+						log "$new_name connected, make handshake (protocol 0) with $new_name..."
+						echo "$new_name << use protocol 0"
 					fi
 
-				elif [ "$info" == "login: $broker" ] || [[ "$info" == "name: "*" becomes $broker" ]]; then
-					log "$broker connected, make handshake (protocol 0) with $broker..."
-					echo "$broker << use protocol 0"
+				elif [[ $info =~ $regex_login ]]; then
+					name=${BASH_REMATCH[1]}
+
+					if [[ " ${broker[@]} " == *" $name "* ]]; then
+						log "$name connected, make handshake (protocol 0) with $name..."
+						echo "$name << use protocol 0"
+					fi
 				fi
 
 			elif [ "$type" == "%" ]; then
@@ -215,8 +217,10 @@ worker_routine() {
 				elif [[ "$info" == "name"* ]]; then
 					log "registered as $worker successfully"
 					observe_state
-					log "make handshake (protocol 0) with $broker..."
-					echo "$broker << use protocol 0"
+					if [[ ${broker[@]} ]]; then
+						log "make handshake (protocol 0) with ${broker[@]}..."
+						printf "%s << use protocol 0\n" "${broker[@]}"
+					fi
 				elif [[ "$info" == "failed name"* ]]; then
 					log "name $worker has been occupied, query online names..."
 					echo "who"
@@ -227,13 +231,25 @@ worker_routine() {
 						done
 						log "register worker on the chat system..."
 						echo "name ${worker:=worker-1}"
-					elif [[ " ${info:5} " != *" $broker "* ]]; then
-						log "$broker disconnected, wait until $broker come back..."
-						linked=
+					else
+						for name in ${broker[@]}; do
+							[[ " ${info:5} " == *" $name "* ]] && continue
+							log "$name disconnected, wait until $name come back..."
+							linked=($(erase_from linked $name))
+						done
+						if ! [ "${keep_unowned_tasks}" ]; then
+							for name in $(printf "%s\n" "${own[@]}" | sort | uniq); do
+								[[ " ${info:5} " == *" $name "* ]] && continue
+								[[ " ${broker[@]} " == *" $name "* ]] && continue
+								for id in ${!own[@]}; do
+									[ "${own[$id]}" == "$name" ] && discard_owned_asset $id
+								done
+							done
+						fi
 					fi
 				elif [[ "$info" == "failed chat"* ]]; then
 					echo "who"
-					log "failed chat, query online names..."
+					log "failed chat, check online clients..."
 				fi
 			fi
 
@@ -264,6 +280,10 @@ worker_routine() {
 				if [ "$options" == "state" ]; then
 					echo "$name << state = ${state[@]}"
 					log "accept query state from $name, state = ${state[@]}"
+
+				elif [ "$options" == "linked" ]; then
+					echo "$name << linked = ${linked[@]}"
+					log "accept query linked from $name, linked = ${linked[@]}"
 
 				elif [ "$options" == "capacity" ]; then
 					current_capacity=${capacity:-$(observe_capacity)}
@@ -335,12 +355,7 @@ worker_routine() {
 				log "accept set ${var}${val:+=\"${val}\"} from $name"
 
 				if [ "$var" == "broker" ]; then
-					for id in ${!own[@]}; do
-						[ "${own[$id]}" == "$val_old" ] && own[$id]=$broker
-					done
-					linked=
-					log "broker has been changed, make handshake (protocol 0) with $broker again..."
-					echo "$broker << use protocol 0"
+					change_broker "$val_old" "${broker//:/ }"
 				elif [ "$var" == "worker" ]; then
 					log "worker name has been changed, register $worker on the chat system..."
 					echo "name ${worker:=worker-1}"
@@ -349,18 +364,24 @@ worker_routine() {
 					observe_capacity=${observe_capacity:-${BASH_REMATCH[2]:-capacity.sh}}
 					refresh_state
 				elif [ "$var" == "state" ]; then
-					[[ $linked ]] && notify_state
+					notify_state
 				fi
 
 			elif [ "$command" == "unset" ]; then
 				var=(${options/=/ })
 				set_var+=($var)
-				regex_forbidden_unset="^(broker|worker|state|linked)$"
+				regex_forbidden_unset="^(worker|state|linked)$"
 
 				if [ "$var" ] && ! [[ $var =~ $regex_forbidden_unset ]]; then
-					echo "$name << accept unset $var"
+					local show_val="$var[@]"
+					declare val_old="${!show_val}"
 					unset $var
+					echo "$name << accept unset $var"
 					log "accept unset $var from $name"
+
+					if [ "$var" == "broker" ]; then
+						change_broker "$val_old" ""
+					fi
 
 				elif [ "$var" ]; then
 					echo "$name << reject unset $var"
@@ -447,6 +468,38 @@ init_system_fd() {
 	return 16
 }
 
+discard_owned_asset() {
+	local id=${1:?id} cmd_pid
+	if [[ -v res[$id] ]]; then
+		log "discard request $id and response $id"
+	elif [[ -v pid[$id] ]]; then
+		log "discard and terminate request $id"
+		cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
+		[[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null
+	fi
+	unset own[$id] cmd[$id] res[$id] pid[$id]
+}
+
+change_broker() {
+	local current=($1) pending=($2)
+	local added=(${pending[@]}) removed=(${current[@]})
+	local who id
+	for who in ${current[@]}; do added=($(erase_from added $who)); done
+	for who in ${pending[@]}; do removed=($(erase_from removed $who)); done
+	log "$name << confirm broker change: (${current[@]}) --> (${pending[@]})"
+	for id in ${!own[@]}; do
+		[[ " ${removed[@]} " == *" ${own[$id]} "* ]] && discard_owned_asset $id
+	done
+	for who in ${added[@]} ${removed[@]}; do
+		linked=($(erase_from linked $who))
+	done
+	if [[ ${added[@]} ]]; then
+		log "broker has been changed, make handshake (protocol 0) with ${added[@]}..."
+		printf "%s << use protocol 0\n" "${added[@]}"
+	fi
+	broker=(${pending[@]})
+}
+
 observe_capacity() {
 	if [ -e "$observe_capacity" ]; then
 		bash "$observe_capacity" $worker 2>/dev/null && return
@@ -467,19 +520,23 @@ observe_state() {
 }
 
 notify_state() {
-	local who=${1:-$broker}
-	echo "$who << state ${state[@]}"
-	log "state ${state[@]}; notify $who"
+	local who
+	for who in ${@:-${linked[@]}}; do
+		echo "$who << state ${state[@]}"
+		log "state ${state[@]}; notify $who"
+	done
 }
 
 notify_state_with_requests() {
-	local who=${1:-$broker}
-	echo "$who << state ${state[@]} (${!cmd[@]})"
-	log "state ${state[@]} (${!cmd[@]}); notify $who"
+	local who
+	for who in ${@:-${linked[@]}}; do
+		echo "$who << state ${state[@]} (${!cmd[@]})"
+		log "state ${state[@]} (${!cmd[@]}); notify $who"
+	done
 }
 
 refresh_state() {
-	[ "$state" != "init" ] && observe_state && [[ $linked ]] && notify_state
+	[ "$state" != "init" ] && observe_state && notify_state
 }
 
 common_vars() {
