@@ -213,13 +213,13 @@ broker_routine() {
 
 		elif [[ $message =~ $regex_chat_system ]]; then
 			type=${BASH_REMATCH[1]}
-			message=${BASH_REMATCH[2]}
+			info=${BASH_REMATCH[2]}
 
 			if [ "$type" == "#" ]; then
 				regex_logout="^logout: (\S+)$"
 				regex_rename="^name: (\S+) becomes (\S+)$"
 
-				if [[ $message =~ $regex_logout ]]; then
+				if [[ $info =~ $regex_logout ]]; then
 					name=${BASH_REMATCH[1]}
 					log "$name logged out"
 					if [[ -v state[$name] ]]; then
@@ -249,7 +249,7 @@ broker_routine() {
 							log "unsubscribe $item for $name"
 						fi
 					done
-				elif [[ $message =~ $regex_rename ]]; then
+				elif [[ $info =~ $regex_rename ]]; then
 					old_name=${BASH_REMATCH[1]}
 					new_name=${BASH_REMATCH[2]}
 					if [ "$new_name" != "$broker" ]; then
@@ -284,19 +284,19 @@ broker_routine() {
 				fi
 
 			elif [ "$type" == "%" ]; then
-				if [[ "$message" == "protocol"* ]]; then
+				if [[ "$info" == "protocol"* ]]; then
 					log "chat system protocol verified successfully"
 					log "register $broker on the chat system..."
 					echo "name $broker"
-				elif [[ "$message" == "failed protocol"* ]]; then
+				elif [[ "$info" == "failed protocol"* ]]; then
 					log "unsupported protocol; shutdown"
 					return 1
-				elif [[ "$message" == "name"* ]]; then
+				elif [[ "$info" == "name"* ]]; then
 					log "registered as $broker successfully"
 					if [ "$workers" ]; then
 						contact_workers ${workers[@]//:/ }
 					fi
-				elif [[ "$message" == "failed name"* ]]; then
+				elif [[ "$info" == "failed name"* ]]; then
 					log "another $broker is already running? shutdown"
 					return 2
 				fi
