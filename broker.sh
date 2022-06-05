@@ -135,15 +135,13 @@ broker_routine() {
 			[ "$current_stat" == "hold" ] && stat="hold"
 			state[$worker]=$stat:$load
 			if [ "$current_stat" != "$stat" ] && (( ${#notify[$stat]} )); then
-				for subscriber in ${notify[$stat]}; do
-					echo "$subscriber << notify $worker state $stat"
-				done
+				printf "%s << notify $worker state $stat\n" ${notify[$stat]}
 				log "state has been changed, notify ${notify[$stat]}"
 			fi
 			notify_capacity
 
 		elif [[ $message =~ $regex_confirm ]]; then
-			name=${BASH_REMATCH[1]}
+			who=${BASH_REMATCH[1]}
 			confirm=${BASH_REMATCH[2]}
 			type=${BASH_REMATCH[3]}
 			id=${BASH_REMATCH[4]}
@@ -151,15 +149,15 @@ broker_routine() {
 			if [[ $id =~ ^[0-9]+$ ]]; then
 				ids=($id)
 				if [ "$type" == "response" ]; then
-					who=${own[$id]}
+					owner=${own[$id]}
 				elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
-					who=${assign[$id]}
+					owner=${assign[$id]}
 				fi
 			else
 				regex=${id}
 				regex=${regex//\*/.*}
 				regex=${regex//\?/.}
-				regex=^$regex=$name$
+				regex=^$regex=$who$
 				if [ "$type" == "response" ]; then
 					ids=($(for id in ${!own[@]}; do
 						[[ $id=${own[$id]} =~ $regex ]] && echo $id
@@ -169,23 +167,23 @@ broker_routine() {
 						[[ $id=${assign[$id]} =~ $regex ]] && echo $id
 					done | sort))
 				fi
-				(( ${#ids[@]} )) && who=$name || who=
+				(( ${#ids[@]} )) && owner=$who || owner=
 			fi
 
-			if [ "$who" == "$name" ]; then
+			if [ "$owner" == "$who" ]; then
 				for id in ${ids[@]}; do
-					if [ "$type" == "request" ] && [ "${state[$name]:0:4}" == "hold" ]; then
-						state[$name]="held":${state[$name]:5}
+					if [ "$type" == "request" ] && [ "${state[$who]:0:4}" == "hold" ]; then
+						state[$who]="held":${state[$who]:5}
 					elif [ "$type" == "terminate" ] && [[ -v own[$id] ]]; then
 						echo "${own[$id]} << $confirm terminate $id"
 					fi
 
 					if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
-						log "confirm that $name ${confirm}ed $type $id"
+						log "confirm that $who ${confirm}ed $type $id"
 						if [ "$type" == "request" ]; then
 							if [[ -v news[assign-${own[$id]}] ]]; then
-								echo "${own[$id]} << notify assign request $id to $name"
-								log "assigned request $id to $name, notify ${own[$id]}"
+								echo "${own[$id]} << notify assign request $id to $who"
+								log "assigned request $id to $who, notify ${own[$id]}"
 							fi
 						elif [ "$type" == "response" ] || [ "$type" == "terminate" ]; then
 							unset cmd[$id] own[$id] res[$id] tmdue[$id] tmout[$id] prefer[$id] assign[$id]
@@ -201,14 +199,14 @@ broker_routine() {
 						fi
 						if [ "$type" != "terminate" ]; then
 							queue=($id ${queue[@]})
-							log "confirm that $name ${confirm}ed $type $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
+							log "confirm that $who ${confirm}ed $type $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
 						fi
 					fi
 				done
-			elif [ "$who" ]; then
-				log "ignore that $name ${confirm}ed $type $id since it is owned by $who"
+			elif [ "$owner" ]; then
+				log "ignore that $who ${confirm}ed $type $id since it is owned by $owner"
 			else
-				log "ignore that $name ${confirm}ed $type $id since no such $type"
+				log "ignore that $who ${confirm}ed $type $id since no such $type"
 			fi
 
 		elif [[ $message =~ $regex_chat_system ]]; then
@@ -220,13 +218,13 @@ broker_routine() {
 				regex_rename="^name: (\S+) becomes (\S+)$"
 
 				if [[ $info =~ $regex_logout ]]; then
-					name=${BASH_REMATCH[1]}
-					log "$name logged out"
-					if [[ -v state[$name] ]]; then
-						discard_worker $name
+					who=${BASH_REMATCH[1]}
+					log "$who logged out"
+					if [[ -v state[$who] ]]; then
+						discard_workers $who
 					fi
 					for id in ${!own[@]}; do
-						if [ "${own[$id]}" == "$name" ] && ! [ "${keep_unowned_tasks}" ]; then
+						if [ "${own[$id]}" == "$who" ] && ! [ "${keep_unowned_tasks}" ]; then
 							unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id]
 							if [[ -v res[$id] ]]; then
 								unset res[$id]
@@ -243,41 +241,41 @@ broker_routine() {
 						fi
 					done
 					for item in ${!notify[@]}; do
-						if [[ " ${notify[$item]} " == *" $name "* ]]; then
-							notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${name}$/d")
-							unset news[$item-$name]
-							log "unsubscribe $item for $name"
+						if [[ " ${notify[$item]} " == *" $who "* ]]; then
+							notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${who}$/d")
+							unset news[$item-$who]
+							log "unsubscribe $item for $who"
 						fi
 					done
 				elif [[ $info =~ $regex_rename ]]; then
-					old_name=${BASH_REMATCH[1]}
-					new_name=${BASH_REMATCH[2]}
-					if [ "$new_name" != "$broker" ]; then
-						log "$old_name renamed as $new_name"
-						if [[ -v state[$old_name] ]]; then
-							state[$new_name]=${state[$old_name]}
-							unset state[$old_name]
-							log "transfer the worker state to $new_name"
+					who=${BASH_REMATCH[1]}
+					new=${BASH_REMATCH[2]}
+					if [ "$new" != "$broker" ]; then
+						log "$who renamed as $new"
+						if [[ -v state[$who] ]]; then
+							state[$new]=${state[$who]}
+							unset state[$who]
+							log "transfer the worker state to $new"
 							for id in ${!assign[@]}; do
-								if [ "${assign[$id]}" == "$old_name" ]; then
+								if [ "${assign[$id]}" == "$who" ]; then
 									log "transfer the ownership of assignment $id"
-									assign[$id]=$new_name
+									assign[$id]=$new
 								fi
 							done
 							notify_capacity
 						fi
 						for id in ${!own[@]}; do
-							if [ "${own[$id]}" == "$old_name" ]; then
+							if [ "${own[$id]}" == "$who" ]; then
 								log "transfer the ownerships of request $id and response $id"
-								own[$id]=$new_name
+								own[$id]=$new
 							fi
 						done
 						for item in ${!notify[@]}; do
-							if [[ " ${notify[$item]} " == *" $old_name "* ]]; then
-								log "transfer the $item subscription to $new_name"
-								notify[$item]=$(printf "%s\n" ${notify[$item]} $new_name | sed "/^${old_name}$/d")
-								news[$item-$new_name]=${news[$item-$old_name]}
-								unset news[$item-$old_name]
+							if [[ " ${notify[$item]} " == *" $who "* ]]; then
+								log "transfer the $item subscription to $new"
+								notify[$item]=$(printf "%s\n" ${notify[$item]} $new | sed "/^${who}$/d")
+								news[$item-$new]=${news[$item-$who]}
+								unset news[$item-$who]
 							fi
 						done
 					fi
@@ -303,132 +301,129 @@ broker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_others ]]; then
-			name=${BASH_REMATCH[1]}
+			who=${BASH_REMATCH[1]}
 			command=${BASH_REMATCH[2]}
 			options=${BASH_REMATCH[3]}
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$name << protocol 0"
-					log "accept query protocol from $name"
+					echo "$who << protocol 0"
+					log "accept query protocol from $who"
 
 				elif [ "$options" == "capacity" ]; then
-					echo "$name << capacity = $capacity"
+					echo "$who << capacity = $capacity"
 					observe_worker_capacity raw
-					echo "$name << worker_capacity = ${worker_capacity[@]}"
-					log "accept query capacity from $name, capacity = $capacity," \
+					echo "$who << worker_capacity = ${worker_capacity[@]}"
+					log "accept query capacity from $who, capacity = $capacity," \
 					    "worker_capacity = ($(list_omit ${worker_capacity[@]}))"
 
 				elif [ "$options" == "queue" ]; then
-					echo "$name << queue = (${queue[@]})"
-					log "accept query queue from $name, queue = ($(list_omit ${queue[@]}))"
+					echo "$who << queue = (${queue[@]})"
+					log "accept query queue from $who, queue = ($(list_omit ${queue[@]}))"
 
 				elif [[ "$options" =~ ^(state)s?$ ]]; then
 					status=()
 					for worker in ${!state[@]}; do
 						status+=("[$worker]=${state[$worker]}")
 					done
-					echo "$name << state = (${status[@]})"
-					log "accept query state from $name, state = ($(list_omit ${status[@]}))"
+					echo "$who << state = (${status[@]})"
+					log "accept query state from $who, state = ($(list_omit ${status[@]}))"
 
 				elif [[ "$options" =~ ^(assign(ment)?)s?$ ]]; then
 					assignment=()
 					for id in ${!assign[@]}; do
-						[ "${own[$id]}" == "$name" ] && assignment+=("[$id]=${assign[$id]}")
+						[ "${own[$id]}" == "$who" ] && assignment+=("[$id]=${assign[$id]}")
 					done
-					echo "$name << assign = (${assignment[@]})"
-					log "accept query assign from $name, assign = ($(list_omit ${assignment[@]}))"
+					echo "$who << assign = (${assignment[@]})"
+					log "accept query assign from $who, assign = ($(list_omit ${assignment[@]}))"
 
 				elif [[ "$options" =~ ^(worker)s?(.*)$ ]]; then
 					workers=(${BASH_REMATCH[2]:-$(<<< ${!state[@]} xargs -r printf "%s\n" | sort)})
 					workers=($(for worker in ${workers[@]}; do [[ -v state[$worker] ]] && echo $worker; done))
-					echo "$name << workers = (${workers[@]})"
+					echo "$who << workers = (${workers[@]})"
 					for worker in ${workers[@]}; do
-						num_assign=0
-						for id in ${!assign[@]}; do
-							[ "${assign[$id]}" == "$worker" ] && num_assign=$((num_assign+1))
-						done
-						echo "$name << # $worker ${state[$worker]} $num_assign assigned"
+						num_assign=$(<<<" ${assign[@]} " grep -o " $worker " | wc -l)
+						echo "$who << # $worker ${state[$worker]} $num_assign assigned"
 					done
-					log "accept query workers from $name, workers = ($(list_omit ${workers[@]}))"
+					log "accept query workers from $who, workers = ($(list_omit ${workers[@]}))"
 
 				elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
 					ids=($(for id in ${ids[@]}; do [[ -v cmd[$id] ]] && echo $id; done))
-					echo "$name << jobs = (${ids[@]})"
+					echo "$who << jobs = (${ids[@]})"
 					for id in ${ids[@]}; do
 						if [[ -v res[$id] ]]; then
-							echo "$name << # $id {${cmd[$id]}} [${own[$id]}] = ${res[$id]%%:*} {${res[$id]#*:}}"
+							echo "$who << # $id {${cmd[$id]}} [${own[$id]}] = ${res[$id]%%:*} {${res[$id]#*:}}"
 						elif [[ -v assign[$id] ]]; then
-							echo "$name << # $id {${cmd[$id]}} [${own[$id]}] @ ${assign[$id]}"
+							echo "$who << # $id {${cmd[$id]}} [${own[$id]}] @ ${assign[$id]}"
 						else
 							rank=0
 							while ! [ ${queue[$((rank++))]:-$id} == $id ]; do :; done
-							echo "$name << # $id {${cmd[$id]}} [${own[$id]}] @ #$rank"
+							echo "$who << # $id {${cmd[$id]}} [${own[$id]}] @ #$rank"
 						fi
 					done
-					log "accept query jobs from $name, jobs = ($(list_omit ${ids[@]}))"
+					log "accept query jobs from $who, jobs = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(request)s?(.*)$ ]] ; then
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
-					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$name" ] && ! [[ -v res[$id] ]] && echo $id; done))
-					echo "$name << requests = (${ids[@]})"
+					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$who" ] && ! [[ -v res[$id] ]] && echo $id; done))
+					echo "$who << requests = (${ids[@]})"
 					for id in ${ids[@]}; do
 						if [[ -v assign[$id] ]]; then
-							echo "$name << # request $id {${cmd[$id]}} @ ${assign[$id]}"
+							echo "$who << # request $id {${cmd[$id]}} @ ${assign[$id]}"
 						else
 							rank=0
 							while ! [ ${queue[$((rank++))]:-$id} == $id ]; do :; done
-							echo "$name << # request $id {${cmd[$id]}} @ #$rank"
+							echo "$who << # request $id {${cmd[$id]}} @ #$rank"
 						fi
 					done
-					log "accept query requests from $name, requests = ($(list_omit ${ids[@]}))"
+					log "accept query requests from $who, requests = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
-					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$name" ] && [[ -v res[$id] ]] && echo $id; done))
-					echo "$name << responses = (${ids[@]})"
+					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$who" ] && [[ -v res[$id] ]] && echo $id; done))
+					echo "$who << responses = (${ids[@]})"
 					for id in ${ids[@]}; do
-						echo "$name << # response $id ${res[$id]%%:*} {${res[$id]#*:}}"
+						echo "$who << # response $id ${res[$id]%%:*} {${res[$id]#*:}}"
 					done
-					log "accept query responses from $name, responses = ($(list_omit ${ids[@]}))"
+					log "accept query responses from $who, responses = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
 					list_args ${BASH_REMATCH[2]:-"$@" $(common_vars) ${set_var[@]}} >/dev/null
-					echo "$name << options = (${vars[@]})"
-					printf "$name << # %s\n" "${args[@]}"
-					log "accept query options from $name, options = ($(list_omit ${vars[@]}))"
+					echo "$who << options = (${vars[@]})"
+					printf "$who << # %s\n" "${args[@]}"
+					log "accept query options from $who, options = ($(list_omit ${vars[@]}))"
 
 				elif [ "$options" == "envinfo" ]; then
-					echo "$name << accept query envinfo"
-					log "accept query envinfo from $name"
+					echo "$who << accept query envinfo"
+					log "accept query envinfo from $who"
 					{
 						envinfo=$(list_envinfo)
-						echo "$name << result envinfo ($(<<<$envinfo wc -l))"
-						<<< $envinfo xargs -r -d'\n' -L1 echo "$name << #"
+						echo "$who << result envinfo ($(<<<$envinfo wc -l))"
+						<<< $envinfo xargs -r -d'\n' -L1 echo "$who << #"
 					} &
 				else
-					log "ignore $command $options from $name"
+					log "ignore $command $options from $who"
 				fi
 
 			elif [ "$command" == "terminate" ]; then
 				id=$options
 				if [[ -v assign[$id] ]]; then
-					if [ "$name" == "${own[$id]}" ]; then
+					if [ "$who" == "${own[$id]}" ]; then
 						echo "${assign[$id]} << terminate $id"
-						log "accept terminate $id from $name and forward it to ${assign[$id]}"
+						log "accept terminate $id from $who and forward it to ${assign[$id]}"
 					else
-						echo "$name << reject terminate $id"
-						log "reject terminate $id from $name since it is owned by ${own[$id]}"
+						echo "$who << reject terminate $id"
+						log "reject terminate $id from $who since it is owned by ${own[$id]}"
 					fi
 				elif [[ -v cmd[$id] ]]; then
 					queue=($(erase_from queue $id))
 					unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id]
-					echo "$name << accept terminate $id"
-					log "accept terminate $id from $name and remove it from queue"
+					echo "$who << accept terminate $id"
+					log "accept terminate $id from $who and remove it from queue"
 				else
-					echo "$name << reject terminate $id"
-					log "reject terminate $id from $name since no such request"
+					echo "$who << reject terminate $id"
+					log "reject terminate $id from $who since no such request"
 				fi
 
 			elif [ "$command" == "use" ]; then
@@ -436,48 +431,48 @@ broker_routine() {
 				if [[ "$options" =~ $regex_use_protocol ]]; then
 					protocol=${BASH_REMATCH[1]}
 					if [ "$protocol" == "0" ]; then
-						echo "$name << accept protocol $protocol"
-						log "accept use protocol $protocol from $name"
+						echo "$who << accept protocol $protocol"
+						log "accept use protocol $protocol from $who"
 					else
-						echo "$name << reject protocol $protocol"
-						log "reject use protocol $protocol from $name, unsupported protocol"
+						echo "$who << reject protocol $protocol"
+						log "reject use protocol $protocol from $who, unsupported protocol"
 					fi
 				else
-					log "ignore $command $options from $name"
+					log "ignore $command $options from $who"
 				fi
 
 			elif [ "$command" == "subscribe" ]; then
 				if [[ $options =~ ^(idle|busy|assign|capacity)$ ]]; then
 					item=$options
-					notify[$item]=$(printf "%s\n" ${notify[$item]} $name | sort | uniq)
-					news[$item-$name]=subscribe
-					echo "$name << accept $command $options"
-					log "accept $command $options from $name"
+					notify[$item]=$(printf "%s\n" ${notify[$item]} $who | sort | uniq)
+					news[$item-$who]=subscribe
+					echo "$who << accept $command $options"
+					log "accept $command $options from $who"
 					if [ "$item" == "idle" ] || [ "$item" == "busy" ]; then
 						for worker in ${!state[@]}; do
 							if [ "${state[$worker]%:*}" == "$item" ]; then
-								echo "$name << notify $worker state $item"
+								echo "$who << notify $worker state $item"
 							fi
 						done
 					elif [ "$item" == "capacity" ]; then
 						observe_worker_capacity
-						echo "$name << notify capacity ${worker_capacity[@]}"
+						echo "$who << notify capacity ${worker_capacity[@]}"
 					fi
 				else
-					echo "$name << reject $command $options"
-					log "reject $command $options from $name, unsupported subscription"
+					echo "$who << reject $command $options"
+					log "reject $command $options from $who, unsupported subscription"
 				fi
 
 			elif [ "$command" == "unsubscribe" ]; then
 				if [[ $options =~ ^(idle|busy|assign|capacity)$ ]]; then
 					item=$options
-					notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${name}$/d")
-					unset news[$item-$name]
-					echo "$name << accept $command $options"
-					log "accept $command $options from $name"
+					notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${who}$/d")
+					unset news[$item-$who]
+					echo "$who << accept $command $options"
+					log "accept $command $options from $who"
 				else
-					echo "$name << reject $command $options"
-					log "reject $command $options from $name, unsupported subscription"
+					echo "$who << reject $command $options"
+					log "reject $command $options from $who, unsupported subscription"
 				fi
 
 			elif [ "$command" == "set" ]; then
@@ -487,12 +482,12 @@ broker_routine() {
 				local show_val="$var[@]"
 				eval val_old="${!show_val}"
 				eval $var="$val"
-				echo "$name << accept set ${var}${val:+=${val}}"
-				log "accept set ${var}${val:+=\"${val}\"} from $name"
+				echo "$who << accept set ${var}${val:+=${val}}"
+				log "accept set ${var}${val:+=\"${val}\"} from $who"
 
 				if [ "$var" == "broker" ]; then
-					log "broker name has been changed, register $broker on the chat system..."
-					echo "name $broker"
+					log "broker who has been changed, register $broker on the chat system..."
+					echo "who $broker"
 				elif [ "$var" == "workers" ]; then
 					contact_workers ${workers[@]//:/ }
 				elif [ "$var" == "capacity" ]; then
@@ -505,12 +500,12 @@ broker_routine() {
 				regex_forbidden_unset="^(broker)$"
 
 				if [ "$var" ] && ! [[ $var =~ $regex_forbidden_unset ]]; then
-					echo "$name << accept unset $var"
+					echo "$who << accept unset $var"
 					unset $var
-					log "accept unset $var from $name"
+					log "accept unset $var from $who"
 
 				elif [ "$var" ]; then
-					echo "$name << reject unset $var"
+					echo "$who << reject unset $var"
 				fi
 
 			elif [ "$command" == "operate" ]; then
@@ -530,14 +525,14 @@ broker_routine() {
 
 					for target in ${!targets[@]}; do
 						if [[ -v state[$target] ]]; then
-							echo "$name << confirm $type $target"
-							log "accept operate $type on $target from $name"
+							echo "$who << confirm $type $target"
+							log "accept operate $type on $target from $who"
 							echo "$target << operate $type"
 						fi
 					done
 					if [[ -v targets[$broker] ]]; then
-						echo "$name << confirm $type $broker"
-						log "accept operate $type on $broker from $name"
+						echo "$who << confirm $type $broker"
+						log "accept operate $type on $broker from $who"
 						if [ "$type" == "shutdown" ]; then
 							return 0
 						elif [ "$type" == "restart" ]; then
@@ -553,41 +548,39 @@ broker_routine() {
 					patt=${BASH_REMATCH[2]:-"*"}
 
 					if [ "$type" == "contact" ]; then
-						log "accept operate $type $patt from $name"
-						echo "$name << confirm $type $patt"
+						log "accept operate $type $patt from $who"
+						echo "$who << confirm $type $patt"
 						contact_workers "$patt"
 
 					elif [ "$type" == "discard" ]; then
-						log "accept operate $type $patt from $name"
+						log "accept operate $type $patt from $who"
 						workers=( $(<<<$patt grep -Eo '\S+' | while IFS= read -r match; do
 							for client in ${!state[@]}; do
 								[[ $client == $match ]] && echo $client
 							done
 						done) )
-						for worker in ${workers[@]}; do
-							echo "$name << confirm $type $worker"
-							discard_worker $worker
-						done
+						printf "$who << confirm $type %s\n" ${workers[@]}
+						discard_workers ${workers[@]}
 					fi
 
 				else
-					log "ignore $command $options from $name"
+					log "ignore $command $options from $who"
 				fi
 
 			elif [ "$command" == "shell" ]; then
 				[[ $options =~ ^(\{(.+)\}|(.+))$ ]] && options=${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}
-				echo "$name << accept execute shell {$options}"
-				log "accept execute shell {$options} from $name"
+				echo "$who << accept execute shell {$options}"
+				log "accept execute shell {$options} from $who"
 				{
 					output=$(eval "$options" 2>&1)
 					code=$?
 					lines=$((${#output} ? $(<<<$output wc -l) : 0))
-					echo "$name << result shell {$options} return $code ($lines)"
-					echo -n "$output" | xargs -r -d'\n' -L1 echo "$name << #"
+					echo "$who << result shell {$options} return $code ($lines)"
+					echo -n "$output" | xargs -r -d'\n' -L1 echo "$who << #"
 				} &
 
 			else
-				log "ignore $command $options from $name"
+				log "ignore $command $options from $who"
 			fi
 
 		elif ! [ "$message" ]; then
@@ -687,10 +680,7 @@ observe_worker_capacity() {
 
 notify_capacity() {
 	if (( ${#notify[capacity]} )) && observe_worker_capacity; then
-		local subscriber
-		for subscriber in ${notify[capacity]}; do
-			echo "$subscriber << notify capacity ${worker_capacity[@]}"
-		done
+		printf "%s << notify capacity ${worker_capacity[@]}\n" ${notify[capacity]}
 		log "capacity has been changed, notify ${notify[capacity]}"
 	fi
 }
@@ -704,16 +694,19 @@ contact_workers() {
 }
 
 
-discard_worker() {
-	local name=${1:?} id
-	unset state[$name]
-	log "discard the worker state of $name"
-	for id in ${!assign[@]}; do
-		if [ "${assign[$id]}" == "$name" ]; then
-			unset assign[$id]
-			queue=($id ${queue[@]})
-			log "revoke assigned request $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
-		fi
+discard_workers() {
+	local worker id
+	for worker in "$@"; do
+		unset state[$worker]
+		log "discard the worker state of $worker"
+		for id in ${!assign[@]}; do
+			if [ "${assign[$id]}" == "$worker" ]; then
+				unset assign[$id]
+				queue=($id ${queue[@]})
+				log "revoke assigned request $id and re-enqueue $id, queue = ($(list_omit ${queue[@]}))"
+			fi
+		done
+		shift
 	done
 	notify_capacity
 }
