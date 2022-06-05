@@ -485,8 +485,8 @@ broker_routine() {
 				val=${options:${#var}+1}
 				set_var+=($var)
 				local show_val="$var[@]"
-				declare val_old="${!show_val}"
-				declare $var="$val"
+				eval val_old="${!show_val}"
+				eval $var="$val"
 				echo "$name << accept set ${var}${val:+=${val}}"
 				log "accept set ${var}${val:+=\"${val}\"} from $name"
 
