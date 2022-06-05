@@ -307,11 +307,9 @@ worker_routine() {
 					log "accept query responses from $name, responses = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
-					opts=($(list_args ${BASH_REMATCH[2]:-"$@" $(common_vars) ${set_var[@]}}))
-					vars=()
-					for opt in ${opts[@]}; do vars+=(${opt%%=*}); done
+					list_args ${BASH_REMATCH[2]:-"$@" $(common_vars) ${set_var[@]}} >/dev/null
 					echo "$name << options = (${vars[@]})"
-					printf "$name << # %s\n" "${opts[@]}"
+					printf "$name << # %s\n" "${args[@]}"
 					log "accept query options from $name, options = ($(list_omit ${vars[@]}))"
 
 				elif [ "$options" == "envinfo" ]; then
@@ -373,7 +371,8 @@ worker_routine() {
 					echo "$name << confirm restart"
 					log "accept operate restart from $name"
 					log "$worker is restarting..."
-					exec $0 $(list_args "$@" $(common_vars) ${set_var[@]})
+					list_args "$@" $(common_vars) ${set_var[@]} >/dev/null
+					exec $0 "${args[@]}"
 
 				else
 					log "ignore $command $options from $name"
@@ -506,13 +505,21 @@ init_system_io() {
 }
 
 list_args() {
-	declare -A args=()
+	args=()
+	vars=()
+	local var val arg
 	for var in "$@"; do
 		var=${var%%=*}
-		[[ -v args[$var] ]] && continue
-		[[ $var =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]] && echo "$var=${!var}" || echo "$var"
-		args[$var]=$var
+		[[ " ${vars[@]} " == *" $var "* ]] && continue
+		arg="${var}"
+		if [[ $var =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]]; then
+			val="$var[@]"
+			arg+="=${!val}"
+		fi
+		args+=("$arg")
+		vars+=("$var")
 	done
+	printf "%s\n" "${args[@]}"
 }
 
 list_omit() {
