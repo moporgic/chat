@@ -481,12 +481,15 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "set" ]; then
-				var=(${options/=/ }); var=${var[0]}
-				val=${options:$((${#var}+1))}
+				var=(${options/=/ })
+				val=${options:${#var}+1}
 				set_var+=($var)
-				echo "$name << accept set ${var}${val:+ ${val}}"
-				declare val_old="${!var}" $var="$val"
+				local show_val="$var[@]"
+				declare val_old="${!show_val}"
+				declare $var="$val"
+				echo "$name << accept set ${var}${val:+=${val}}"
 				log "accept set ${var}${val:+=\"${val}\"} from $name"
+
 				if [ "$var" == "broker" ]; then
 					log "broker name has been changed, register $broker on the chat system..."
 					echo "name $broker"
@@ -497,9 +500,11 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "unset" ]; then
-				var=$options
+				var=(${options/=/ })
 				set_var+=($var)
-				if [ "$var" ] && [ "$var" != "broker" ]; then
+				regex_forbidden_unset="^(broker)$"
+
+				if [ "$var" ] && ! [[ $var =~ $regex_forbidden_unset ]]; then
 					echo "$name << accept unset $var"
 					unset $var
 					log "accept unset $var from $name"
