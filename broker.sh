@@ -138,7 +138,6 @@ broker_routine() {
 				printf "%s << notify $worker state $stat\n" ${notify[$stat]}
 				log "state has been changed, notify ${notify[$stat]}"
 			fi
-			notify_capacity
 
 		elif [[ $message =~ $regex_confirm ]]; then
 			who=${BASH_REMATCH[1]}
@@ -203,6 +202,7 @@ broker_routine() {
 						fi
 					fi
 				done
+
 			elif [ "$owner" ]; then
 				log "ignore that $who ${confirm}ed $type $id since it is owned by $owner"
 			else
@@ -247,6 +247,7 @@ broker_routine() {
 							log "unsubscribe $item for $who"
 						fi
 					done
+
 				elif [[ $info =~ $regex_rename ]]; then
 					who=${BASH_REMATCH[1]}
 					new=${BASH_REMATCH[2]}
@@ -262,7 +263,6 @@ broker_routine() {
 									assign[$id]=$new
 								fi
 							done
-							notify_capacity
 						fi
 						for id in ${!own[@]}; do
 							if [ "${own[$id]}" == "$who" ]; then
@@ -310,23 +310,26 @@ broker_routine() {
 					echo "$who << protocol 0"
 					log "accept query protocol from $who"
 
+				elif [ "$options" == "overview" ]; then
+					observe_overview
+					echo "$who << overview = ${overview[@]}"
+					log "accept query overview from $who, overview = ${overview[@]}"
+
 				elif [ "$options" == "capacity" ]; then
-					observe_capacity
-					echo "$who << capacity = ${system_capacity[1]}/$capacity (${system_capacity[@]:1})"
-					log "accept query capacity from $who, capacity = ${system_capacity[1]}/$capacity" \
+					observe_overview; observe_capacity
+					echo "$who << capacity = ${system_capacity[0]}/$capacity (${system_capacity[@]:1})"
+					log "accept query capacity from $who, capacity = ${system_capacity[0]}/$capacity" \
 					    "($(list_omit ${system_capacity[@]:1}))"
 
 				elif [ "$options" == "queue" ]; then
 					echo "$who << queue = (${queue[@]})"
 					log "accept query queue from $who, queue = ($(list_omit ${queue[@]}))"
 
-				elif [[ "$options" =~ ^(state)s?$ ]]; then
-					status=()
-					for worker in ${!state[@]}; do
-						status+=("[$worker]=${state[$worker]}")
-					done
-					echo "$who << state = (${status[@]})"
-					log "accept query state from $who, state = ($(list_omit ${status[@]}))"
+				elif [[ "$options" =~ ^(states?|status)$ ]]; then
+					observe_overview; observe_status
+					echo "$who << state = ${system_status[@]:0:2} (${system_status[@]:2})"
+					log "accept query state from $who," \
+					    "state = ${system_status[@]:0:2} ($(list_omit ${system_status[@]:2}))"
 
 				elif [[ "$options" =~ ^(assign(ment)?)s?$ ]]; then
 					assignment=()
@@ -441,7 +444,7 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "subscribe" ]; then
-				if [[ $options =~ ^(idle|busy|assign|capacity)$ ]]; then
+				if [[ $options =~ ^(state|status|idle|busy|assign|capacity)$ ]]; then
 					item=$options
 					notify[$item]=$(printf "%s\n" ${notify[$item]} $who | sort | uniq)
 					news[$item-$who]=subscribe
@@ -453,8 +456,14 @@ broker_routine() {
 								echo "$who << notify $worker state $item"
 							fi
 						done
+					elif [ "$item" == "state" ]; then
+						observe_overview; observe_state
+						echo "$who << notify state ${system_state[@]}"
+					elif [ "$item" == "status" ]; then
+						observe_overview; observe_status
+						echo "$who << notify state ${system_status[@]}"
 					elif [ "$item" == "capacity" ]; then
-						observe_capacity
+						observe_overview; observe_capacity
 						echo "$who << notify capacity ${system_capacity[@]}"
 					fi
 				else
@@ -463,7 +472,7 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "unsubscribe" ]; then
-				if [[ $options =~ ^(idle|busy|assign|capacity)$ ]]; then
+				if [[ $options =~ ^(state|status|idle|busy|assign|capacity)$ ]]; then
 					item=$options
 					notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${who}$/d")
 					unset news[$item-$who]
@@ -489,8 +498,6 @@ broker_routine() {
 					echo "who $broker"
 				elif [ "$var" == "workers" ]; then
 					contact_workers ${workers[@]//:/ }
-				elif [ "$var" == "capacity" ]; then
-					notify_capacity
 				fi
 
 			elif [ "$command" == "unset" ]; then
@@ -610,6 +617,7 @@ broker_routine() {
 		if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
 			assign_queued_requests
 		fi
+		refresh_observations
 	done
 
 	log "message input is terminated, chat system is down?"
@@ -663,43 +671,71 @@ extract_anchor_cost() {
 
 observe_overview() {
 	local overview_last=${overview[@]}
-	overview=() # idle 16+32+0 128 65536
+	overview=() # idle 48/128 16+32+0 128 65536
 	size_details=() # [A]=4 [B]=16 ...
 	load_details=() # [A]=2/4 [B]=8/16 ...
-	local load size load_total=0 size_total=0
+	stat_details=() # [A]=idle:2/4 [B]=idle:8/16 ...
+	local stat load size load_total=0 size_total=0
 	for worker in ${!state[@]}; do
-		load=${state[$worker]:5}
+		stat=${state[$worker]}
+		load=${stat:5}
 		load=(${load/\// })
 		size=${load[1]}
 		load_total=$((load_total+load))
 		size_total=$((size_total+size))
+		stat_details+=("[$worker]=$stat")
 		load_details+=("[$worker]=$load/$size")
 		size_details+=("[$worker]=$size")
 	done
-	local stat task_total
-	(( $load_total < $size_total )) && stat="idle" || stat="busy"
-	task_total=${load_total}+${#queue[@]}
-	(( ${#res[@]} )) && task_total+=+${#res[@]}
-	overview=(${stat} ${task_total} ${size_total} ${capacity})
+	local stat="idle" size_limit=$size_total
+	(( $load_total < $size_total )) || stat="busy"
+	(( $size_limit < $capacity )) || size_limit=$capacity
+	overview=(${stat} ${#cmd[@]}/${size_limit} \
+	          ${load_total}+${#queue[@]}+${#res[@]} ${size_total} ${capacity})
 	local overview_this=${overview[@]}
 	[ "$overview_this" != "$overview_last" ]
 	return $?
 }
 
-observe_capacity() {
-	observe_overview || return $?
-	local system_capacity_last=${system_capacity[@]}
-	local size=${overview[2]}
-	(( $size < $capacity )) || size=$capacity
-	system_capacity=($size "${size_details[@]}")
-	local system_capacity_this=${system_capacity[@]}
-	[ "$system_capacity_this" && "$system_capacity_last" ]
+observe_state() {
+	local system_state_last=${system_state[@]}
+	system_state=(${overview[@]:0:2})
+	local system_state_this=${system_state[@]}
+	[ "$system_state_this" != "$system_state_last" ]
 	return $?
 }
 
-notify_capacity() {
+observe_status() {
+	local system_status_last=${system_status[@]}
+	system_status=(${overview[@]:0:2} "${stat_details[@]}")
+	local system_status_this=${system_status[@]}
+	[ "$system_status_this" != "$system_status_last" ]
+	return $?
+}
+
+observe_capacity() {
+	local system_capacity_last=${system_capacity[@]}
+	system_capacity=(${overview[1]#*/} "${size_details[@]}")
+	local system_capacity_this=${system_capacity[@]}
+	[ "$system_capacity_this" != "$system_capacity_last" ]
+	return $?
+}
+
+refresh_observations() {
+	observe_overview
+	if (( ${#notify[state]} )) && observe_state; then
+		local notify_state=${system_state[@]}
+		printf "%s << notify state $notify_state\n" ${notify[state]}
+		log "state has been changed, notify ${notify[state]}"
+	fi
+	if (( ${#notify[status]} )) && observe_status; then
+		local notify_status=${system_status[@]}
+		printf "%s << notify state $notify_status\n" ${notify[status]}
+		log "status has been changed, notify ${notify[status]}"
+	fi
 	if (( ${#notify[capacity]} )) && observe_capacity; then
-		printf "%s << notify capacity ${system_capacity[@]}\n" ${notify[capacity]}
+		local notify_capacity=${system_capacity[@]}
+		printf "%s << notify capacity $notify_capacity\n" ${notify[capacity]}
 		log "capacity has been changed, notify ${notify[capacity]}"
 	fi
 }
@@ -726,7 +762,6 @@ discard_workers() {
 		done
 		shift
 	done
-	notify_capacity
 }
 
 common_vars() {
