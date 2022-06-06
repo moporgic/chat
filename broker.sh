@@ -688,8 +688,8 @@ observe_overview() {
 		size_details+=("[$worker]=$size")
 	done
 	local stat="idle" size_limit=$size_total
-	(( $load_total < $size_total )) || stat="busy"
-	(( $size_limit < $capacity )) || size_limit=$capacity
+	(( $size_limit >= $capacity )) && size_limit=$capacity
+	(( $load_total >= $size_limit )) && stat="busy"
 	local num_tasks=${load_total}+${#queue[@]}+${#res[@]}
 	overview=(${stat} ${load_total}/${size_limit} \
 	          ${#cmd[@]}/${capacity} ${num_tasks})
