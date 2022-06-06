@@ -1,13 +1,13 @@
 #!/bin/bash
 
 worker_main() {
-	log "worker version 2022-06-05 (protocol 0)"
+	log "worker version 2022-06-06 (protocol 0)"
 	for var in "$@"; do declare "$var" 2>/dev/null; done
 
-	broker=${broker-broker}; broker=(${broker//:/ })
+	broker=${broker-broker}
+	broker=(${broker//:/ })
 	worker=${worker:-worker-1}
-	[[ ${capacity-$(nproc)} =~ ^([0-9]+)|(.+)$ ]] && capacity=${BASH_REMATCH[1]}
-	observe_capacity=${observe_capacity:-${BASH_REMATCH[2]:-capacity.sh}}
+	capacity=${capacity-$(nproc)}
 
 	declare -A own # [id]=requester
 	declare -A cmd # [id]=command
@@ -283,14 +283,15 @@ worker_routine() {
 					log "accept query linked from $who, linked = ${linked[@]}"
 
 				elif [ "$options" == "capacity" ]; then
-					current_capacity=${capacity:-$(observe_capacity)}
-					echo "$who << capacity = ${current_capacity:-0}"
-					log "accept query capacity from $who, capacity = ${current_capacity:-0}"
+					observe_capacity
+					echo "$who << capacity = ${capacity_this}"
+					log "accept query capacity from $who, capacity = ${capacity_this}"
 
 				elif [ "$options" == "loading" ]; then
-					current_capacity=${capacity:-$(observe_capacity)}
-					echo "$who << loading = ${#cmd[@]}/${current_capacity:-0}"
-					log "accept query loading from $who, loading = ${#cmd[@]}/${current_capacity:-0}"
+					observe_capacity
+					local num_requests=$((${#cmd[@]} - ${#res[@]}))
+					echo "$who << loading = ${num_requests}/${capacity_this}"
+					log "accept query loading from $who, loading = ${num_requests}/${capacity_this}"
 
 				elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
@@ -356,9 +357,6 @@ worker_routine() {
 				elif [ "$var" == "worker" ]; then
 					log "worker who has been changed, register $worker on the chat system..."
 					echo "who ${worker:=worker-1}"
-				elif [ "$var" == "capacity" ] || [ "$var" == "observe_capacity" ]; then
-					[[ ${capacity-$(nproc)} =~ ^([0-9]+)|(.+)$ ]] && capacity=${BASH_REMATCH[1]}
-					observe_capacity=${observe_capacity:-${BASH_REMATCH[2]:-capacity.sh}}
 				elif [ "$var" == "state" ]; then
 					notify_state
 				fi
@@ -499,21 +497,30 @@ change_broker() {
 }
 
 observe_capacity() {
-	if [ -e "$observe_capacity" ]; then
-		bash "$observe_capacity" $worker 2>/dev/null && return
-		log "failed to observe capacity: $observe_capacity return $?"
+	local capacity_last=$capacity_this
+	local capacity_src=$capacity
+	if ! [[ $capacity_src =~ ^[0-9]+$ ]] && [ -e "$capacity_src" ]; then
+		local capacity_out=$(bash "$capacity_src" $worker 2>/dev/null)
+		if ! [[ $capacity_out =~ ^[0-9]+$ ]]; then
+			log "failed to observe capacity with $capacity_src"
+			capacity_out=0
+		fi
+		capacity_src=$capacity_out
 	fi
-	nproc
+	capacity_this=${capacity_src:-$(nproc)}
+	[ "$capacity_this" != "$capacity_last" ]
+	return $?
 }
 
 observe_state() {
-	local current_state_=${state[@]}
-	local current_capacity=${capacity:-$(observe_capacity)}
-	state=()
-	(( $((${#cmd[@]} - ${#res[@]})) < ${current_capacity:-0} )) && state=idle || state=busy
-	state+=(${#cmd[@]}/${current_capacity:-0})
-	local state_=${state[@]}
-	[ "$state_" != "$current_state_" ]
+	local state_last=${state[@]}
+	observe_capacity
+	local stat="idle"
+	local num_requests=$((${#cmd[@]} - ${#res[@]}))
+	(( ${num_requests} >= ${capacity_this} )) && stat="busy"
+	state=($stat ${num_requests}/${capacity_this})
+	local state_this=${state[@]}
+	[ "$state_this" != "$state_last" ]
 	return $?
 }
 
@@ -538,7 +545,7 @@ refresh_state() {
 }
 
 common_vars() {
-	echo broker worker capacity observe_capacity logfile
+	echo broker worker capacity logfile
 }
 
 init_system_io() {
