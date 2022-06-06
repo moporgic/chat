@@ -54,7 +54,7 @@ broker_routine() {
 			id=${BASH_REMATCH[4]}
 			command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
 			options=${BASH_REMATCH[8]}
-			if (( ${#cmd[@]} < ${capacity:-65536} )); then
+			if (( $((${#cmd[@]} - ${#res[@]})) < ${capacity:-65536} )); then
 				if [[ $id ]]; then
 					reply="$id"
 				else
@@ -617,6 +617,7 @@ broker_routine() {
 		if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
 			assign_queued_requests
 		fi
+
 		refresh_observations
 	done
 

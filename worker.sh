@@ -74,7 +74,6 @@ worker_routine() {
 					echo "$requester << reject request $reply"
 					log "reject request $id {$command} from $requester since id $id has been occupied"
 				fi
-				refresh_state
 			else
 				echo "$requester << reject request ${id:-{$command\}}"
 				log "reject request ${id:+$id }{$command} from $requester due to $state state, #cmd = ${#cmd[@]}"
@@ -97,7 +96,6 @@ worker_routine() {
 						execute $id >&${res_fd} {res_fd}>&- &
 						pid[$id]=$!
 					fi
-					refresh_state
 				else
 					log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
 				fi
@@ -144,7 +142,6 @@ worker_routine() {
 						log "request $id {${cmd[$id]}} is already terminated"
 					fi
 					unset own[$id] cmd[$id] res[$id] pid[$id]
-					refresh_state
 				else
 					echo "$who << reject terminate $id"
 					log "reject terminate $id from $who since it is owned by ${own[$id]}"
@@ -362,7 +359,6 @@ worker_routine() {
 				elif [ "$var" == "capacity" ] || [ "$var" == "observe_capacity" ]; then
 					[[ ${capacity-$(nproc)} =~ ^([0-9]+)|(.+)$ ]] && capacity=${BASH_REMATCH[1]}
 					observe_capacity=${observe_capacity:-${BASH_REMATCH[2]:-capacity.sh}}
-					refresh_state
 				elif [ "$var" == "state" ]; then
 					notify_state
 				fi
@@ -421,7 +417,7 @@ worker_routine() {
 			fi
 
 		elif ! [ "$message" ]; then
-			refresh_state
+			:
 
 		else
 			log "ignore message: $message"
@@ -436,6 +432,8 @@ worker_routine() {
 				log "complete orphan response $id $code {$output}"
 			fi
 		done
+
+		refresh_state
 	done
 
 	log "message input is terminated, chat system is down?"
@@ -512,7 +510,7 @@ observe_state() {
 	local current_state_=${state[@]}
 	local current_capacity=${capacity:-$(observe_capacity)}
 	state=()
-	(( ${#cmd[@]} < ${current_capacity:-0} )) && state=idle || state=busy
+	(( $((${#cmd[@]} - ${#res[@]})) < ${current_capacity:-0} )) && state=idle || state=busy
 	state+=(${#cmd[@]}/${current_capacity:-0})
 	local state_=${state[@]}
 	[ "$state_" != "$current_state_" ]
