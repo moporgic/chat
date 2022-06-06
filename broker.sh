@@ -95,7 +95,7 @@ broker_routine() {
 					log "reject request $id {$command} from $requester since id $id has been occupied"
 				fi
 			else
-				echo "$requester << reject request ${id:-\{$command\}}"
+				echo "$requester << reject request ${id:-{$command\}}"
 				log "reject request ${id:+$id }{$command} from $requester due to capacity," \
 				    "#cmd = ${#cmd[@]}, queue = ($(list_omit ${queue[@]}))"
 			fi

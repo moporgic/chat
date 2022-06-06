@@ -76,7 +76,7 @@ worker_routine() {
 				fi
 				refresh_state
 			else
-				echo "$requester << reject request ${id:-\{$command\}}"
+				echo "$requester << reject request ${id:-{$command\}}"
 				log "reject request ${id:+$id }{$command} from $requester due to $state state, #cmd = ${#cmd[@]}"
 			fi
 
