@@ -825,7 +825,7 @@ init_logfile() {
 	exec 3>> $logfile
 	if flock -xn 3; then
 		trap 'code=$?; flock -u 3; exit $code' EXIT
-		exec 2> >(trap '' INT TERM; tee /dev/fd/2 >&3)
+		exec 2> >(trap '' INT TERM; exec tee /dev/fd/2 >&3)
 	fi
 }
 
