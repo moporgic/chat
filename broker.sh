@@ -317,9 +317,9 @@ broker_routine() {
 
 				elif [ "$options" == "capacity" ]; then
 					observe_overview; observe_capacity
-					echo "$who << capacity = ${system_capacity[0]}/$capacity (${system_capacity[@]:1})"
-					log "accept query capacity from $who, capacity = ${system_capacity[0]}/$capacity" \
-					    "($(list_omit ${system_capacity[@]:1}))"
+					echo "$who << capacity = ${system_capacity[@]:0:2} (${system_capacity[@]:2})"
+					log "accept query capacity from $who, capacity = ${system_capacity[@]:0:2}" \
+					    "($(list_omit ${system_capacity[@]:2}))"
 
 				elif [ "$options" == "queue" ]; then
 					echo "$who << queue = (${queue[@]})"
@@ -327,9 +327,9 @@ broker_routine() {
 
 				elif [[ "$options" =~ ^(states?|status)$ ]]; then
 					observe_overview; observe_status
-					echo "$who << state = ${system_status[@]:0:2} (${system_status[@]:2})"
+					echo "$who << state = ${system_status[@]:0:4} (${system_status[@]:4})"
 					log "accept query state from $who," \
-					    "state = ${system_status[@]:0:2} ($(list_omit ${system_status[@]:2}))"
+					    "state = ${system_status[@]:0:4} ($(list_omit ${system_status[@]:4}))"
 
 				elif [[ "$options" =~ ^(assign(ment)?)s?$ ]]; then
 					assignment=()
