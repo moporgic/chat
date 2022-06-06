@@ -671,7 +671,7 @@ extract_anchor_cost() {
 
 observe_overview() {
 	local overview_last=${overview[@]}
-	overview=() # idle 48/128 16+32+0 128 65536
+	overview=() # idle 16/128 48/65536 16+32+0
 	size_details=() # [A]=4 [B]=16 ...
 	load_details=() # [A]=2/4 [B]=8/16 ...
 	stat_details=() # [A]=idle:2/4 [B]=idle:8/16 ...
@@ -690,8 +690,9 @@ observe_overview() {
 	local stat="idle" size_limit=$size_total
 	(( $load_total < $size_total )) || stat="busy"
 	(( $size_limit < $capacity )) || size_limit=$capacity
-	overview=(${stat} ${#cmd[@]}/${size_limit} \
-	          ${load_total}+${#queue[@]}+${#res[@]} ${size_total} ${capacity})
+	local num_tasks=${load_total}+${#queue[@]}+${#res[@]}
+	overview=(${stat} ${load_total}/${size_limit} \
+	          ${#cmd[@]}/${capacity} ${num_tasks})
 	local overview_this=${overview[@]}
 	[ "$overview_this" != "$overview_last" ]
 	return $?
@@ -707,7 +708,7 @@ observe_state() {
 
 observe_status() {
 	local system_status_last=${system_status[@]}
-	system_status=(${overview[@]:0:2} "${stat_details[@]}")
+	system_status=(${overview[@]} "${stat_details[@]}")
 	local system_status_this=${system_status[@]}
 	[ "$system_status_this" != "$system_status_last" ]
 	return $?
@@ -715,7 +716,7 @@ observe_status() {
 
 observe_capacity() {
 	local system_capacity_last=${system_capacity[@]}
-	system_capacity=(${overview[1]#*/} "${size_details[@]}")
+	system_capacity=(${overview[1]#*/} $capacity "${size_details[@]}")
 	local system_capacity_this=${system_capacity[@]}
 	[ "$system_capacity_this" != "$system_capacity_last" ]
 	return $?
