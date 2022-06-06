@@ -33,7 +33,7 @@ worker_main() {
 }
 
 worker_routine() {
-	state=init
+	state=("init")
 	linked=()
 
 	log "verify chat system protocol 0..."
@@ -525,19 +525,15 @@ observe_state() {
 }
 
 notify_state() {
-	local who
-	for who in ${@:-${linked[@]}}; do
-		echo "$who << state ${state[@]}"
-		log "state ${state[@]}; notify $who"
-	done
+	local status=${state[@]}
+	printf "%s << state $status\n" ${@:-${linked[@]}}
+	log "state $status; notify ${@:-${linked[@]}}"
 }
 
 notify_state_with_requests() {
-	local who
-	for who in ${@:-${linked[@]}}; do
-		echo "$who << state ${state[@]} (${!cmd[@]})"
-		log "state ${state[@]} (${!cmd[@]}); notify $who"
-	done
+	local status="${state[@]} (${!cmd[@]})"
+	printf "%s << state $status\n" ${@:-${linked[@]}}
+	log "state $status; notify ${@:-${linked[@]}}"
 }
 
 refresh_state() {
