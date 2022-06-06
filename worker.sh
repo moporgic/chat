@@ -13,8 +13,6 @@ worker_main() {
 	declare -A cmd # [id]=command
 	declare -A res # [id]=code:output
 	declare -A pid # [id]=PID
-	declare -a linked # broker...
-	declare state # (idle|busy #cmd/capacity)
 
 	list_args "$@" $(common_vars) | while IFS= read -r opt; do log "option: $opt"; done
 	list_envinfo | while IFS= read -r info; do log "platform $info"; done
@@ -33,8 +31,8 @@ worker_main() {
 }
 
 worker_routine() {
-	state=("init")
-	linked=()
+	local state=("init") # (idle|busy #cmd/capacity)
+	local linked=() # broker...
 
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
