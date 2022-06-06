@@ -1,7 +1,7 @@
 #!/bin/bash
 
 broker_main() {
-	log "broker version 2022-06-04 (protocol 0)"
+	log "broker version 2022-06-06 (protocol 0)"
 	for var in "$@"; do declare "$var" 2>/dev/null; done
 
 	broker=${broker:-broker}
@@ -311,11 +311,10 @@ broker_routine() {
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "capacity" ]; then
-					echo "$who << capacity = $capacity"
-					observe_worker_capacity raw
-					echo "$who << worker_capacity = ${worker_capacity[@]}"
-					log "accept query capacity from $who, capacity = $capacity," \
-					    "worker_capacity = ($(list_omit ${worker_capacity[@]}))"
+					observe_capacity
+					echo "$who << capacity = ${system_capacity[1]}/$capacity (${system_capacity[@]:1})"
+					log "accept query capacity from $who, capacity = ${system_capacity[1]}/$capacity" \
+					    "($(list_omit ${system_capacity[@]:1}))"
 
 				elif [ "$options" == "queue" ]; then
 					echo "$who << queue = (${queue[@]})"
@@ -455,8 +454,8 @@ broker_routine() {
 							fi
 						done
 					elif [ "$item" == "capacity" ]; then
-						observe_worker_capacity
-						echo "$who << notify capacity ${worker_capacity[@]}"
+						observe_capacity
+						echo "$who << notify capacity ${system_capacity[@]}"
 					fi
 				else
 					echo "$who << reject $command $options"
@@ -662,25 +661,45 @@ extract_anchor_cost() {
 	echo ${cost:--1}
 }
 
-observe_worker_capacity() {
-	local current_worker_capacity_=${worker_capacity[@]}
-	local capacity_details=
-	worker_capacity=(0)
+observe_overview() {
+	local overview_last=${overview[@]}
+	overview=() # idle 16+32+0 128 65536
+	size_details=() # [A]=4 [B]=16 ...
+	load_details=() # [A]=2/4 [B]=8/16 ...
+	local load size load_total=0 size_total=0
 	for worker in ${!state[@]}; do
-		local cap=${state[$worker]#*/}
-		worker_capacity=$((worker_capacity+cap))
-		capacity_details+=("[$worker]=$cap")
+		load=${state[$worker]:5}
+		load=(${load/\// })
+		size=${load[1]}
+		load_total=$((load_total+load))
+		size_total=$((size_total+size))
+		load_details+=("[$worker]=$load/$size")
+		size_details+=("[$worker]=$size")
 	done
-	[ "$1" != "raw" ] && worker_capacity=$((worker_capacity < capacity ? worker_capacity : capacity))
-	worker_capacity+=(${capacity_details[@]})
-	local worker_capacity_=${worker_capacity[@]}
-	[ "$worker_capacity_" != "$current_worker_capacity_" ]
+	local stat task_total
+	(( $load_total < $size_total )) && stat="idle" || stat="busy"
+	task_total=${load_total}+${#queue[@]}
+	(( ${#res[@]} )) && task_total+=+${#res[@]}
+	overview=(${stat} ${task_total} ${size_total} ${capacity})
+	local overview_this=${overview[@]}
+	[ "$overview_this" != "$overview_last" ]
+	return $?
+}
+
+observe_capacity() {
+	observe_overview || return $?
+	local system_capacity_last=${system_capacity[@]}
+	local size=${overview[2]}
+	(( $size < $capacity )) || size=$capacity
+	system_capacity=($size "${size_details[@]}")
+	local system_capacity_this=${system_capacity[@]}
+	[ "$system_capacity_this" && "$system_capacity_last" ]
 	return $?
 }
 
 notify_capacity() {
-	if (( ${#notify[capacity]} )) && observe_worker_capacity; then
-		printf "%s << notify capacity ${worker_capacity[@]}\n" ${notify[capacity]}
+	if (( ${#notify[capacity]} )) && observe_capacity; then
+		printf "%s << notify capacity ${system_capacity[@]}\n" ${notify[capacity]}
 		log "capacity has been changed, notify ${notify[capacity]}"
 	fi
 }
@@ -692,7 +711,6 @@ contact_workers() {
 	done
 	log "contact $@ for worker state"
 }
-
 
 discard_workers() {
 	local worker id
