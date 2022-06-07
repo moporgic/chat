@@ -1,24 +1,29 @@
 #!/bin/bash
 
 worker_main() {
-	log "worker version 2022-06-06 (protocol 0)"
-	for var in "$@"; do declare "$var" 2>/dev/null; done
-
-	broker=${broker-broker}
-	broker=(${broker//:/ })
-	worker=${worker:-worker-1}
-	capacity=${capacity-$(nproc)}
+	log "worker version 2022-06-08 (protocol 0)"
+	declare "$@" >/dev/null 2>&1
+	declare broker=${broker-broker}
+	declare broker=(${broker//:/ })
+	declare worker=${worker:-worker-1}
+	declare capacity=${capacity-$(nproc)}
 
 	declare -A own # [id]=requester
 	declare -A cmd # [id]=command
 	declare -A res # [id]=code:output
 	declare -A pid # [id]=PID
 
-	list_args "$@" $(common_vars) | while IFS= read -r opt; do log "option: $opt"; done
+	local vars=() args=() opt info
+	list_args broker worker capacity "$@" logfile | while IFS= read -r opt; do log "option: $opt"; done
 	list_envinfo | while IFS= read -r info; do log "platform $info"; done
 
 	trap 'log "${worker:-worker} has been interrupted"; exit 64' INT
 	trap 'log "${worker:-worker} has been terminated"; exit 64' TERM
+
+	declare set_vars=(${vars[@]})
+	declare id_next=1
+	declare io_count=0
+	declare res_fd
 
 	while init_system_io "$@" && init_system_fd "$@"; do
 		worker_routine "$@"
@@ -31,7 +36,7 @@ worker_main() {
 }
 
 worker_routine() {
-	local state=("init") # (idle|busy #cmd/capacity)
+	local state=("init") # (idle|busy #requests/capacity)
 	local linked=() # broker...
 
 	log "verify chat system protocol 0..."
@@ -44,20 +49,21 @@ worker_routine() {
 	local regex_others="^(\S+) >> (operate|shell|set|unset|use|query|report) (.+)$"
 	local regex_chat_system="^(#|%) (.+)$"
 
+	local message
 	while input message; do
 		if [[ $message =~ $regex_request ]]; then
-			requester=${BASH_REMATCH[1]}
-			id=${BASH_REMATCH[4]}
-			command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
-			options=${BASH_REMATCH[8]}
+			local requester=${BASH_REMATCH[1]}
+			local id=${BASH_REMATCH[4]}
+			local command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
+			local options=${BASH_REMATCH[8]}
 
 			if [ "$state" == "idle" ]; then
 				if [[ $id ]]; then
-					reply="$id"
+					local reply="$id"
 				else
 					id=${id_next:-1}
 					while [[ -v own[$id] ]]; do id=$((id+1)); done
-					reply="$id {$command}"
+					local reply="$id {$command}"
 				fi
 				if ! [[ -v own[$id] ]]; then
 					own[$id]=$requester
@@ -78,9 +84,9 @@ worker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_confirm_response ]]; then
-			who=${BASH_REMATCH[1]}
-			confirm=${BASH_REMATCH[2]}
-			id=${BASH_REMATCH[3]}
+			local who=${BASH_REMATCH[1]}
+			local confirm=${BASH_REMATCH[2]}
+			local id=${BASH_REMATCH[3]}
 
 			if [[ -v own[$id] ]]; then
 				if [ "${own[$id]}" == "$who" ]; then
@@ -102,10 +108,10 @@ worker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_confirm_others ]]; then
-			who=${BASH_REMATCH[1]}
-			confirm=${BASH_REMATCH[2]}
-			what=${BASH_REMATCH[3]}
-			option=${BASH_REMATCH[4]}
+			local who=${BASH_REMATCH[1]}
+			local confirm=${BASH_REMATCH[2]}
+			local what=${BASH_REMATCH[3]}
+			local option=${BASH_REMATCH[4]}
 
 			if [ "$confirm $what" == "confirm state" ]; then
 				log "$who confirmed state $option"
@@ -126,14 +132,14 @@ worker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_terminate ]]; then
-			who=${BASH_REMATCH[1]}
-			id=${BASH_REMATCH[2]}
+			local who=${BASH_REMATCH[1]}
+			local id=${BASH_REMATCH[2]}
 
 			if [[ -v pid[$id] ]]; then
 				if [ "${own[$id]}" == "$who" ]; then
 					echo "$who << accept terminate $id"
 					log "accept terminate $id from $who"
-					cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
+					local cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
 					if [[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null; then
 						log "request $id {${cmd[$id]}} with pid $cmd_pid has been terminated successfully"
 					else
@@ -150,33 +156,35 @@ worker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_chat_system ]]; then
-			type=${BASH_REMATCH[1]}
-			info=${BASH_REMATCH[2]}
+			local type=${BASH_REMATCH[1]}
+			local info=${BASH_REMATCH[2]}
 
 			if [ "$type" == "#" ]; then
-				regex_login="^login: (\S+)$"
-				regex_logout="^logout: (\S+)$"
-				regex_rename="^name: (\S+) becomes (\S+)$"
+				local regex_login="^login: (\S+)$"
+				local regex_logout="^logout: (\S+)$"
+				local regex_rename="^name: (\S+) becomes (\S+)$"
 
 				if [[ $info =~ $regex_logout ]]; then
-					who=${BASH_REMATCH[1]}
+					local who=${BASH_REMATCH[1]}
 					if [[ " ${linked[@]} " == *" $who "* ]]; then
 						log "$who disconnected, wait until $who come back..."
 						linked=($(erase_from linked $who))
 
 					elif [[ " ${own[@]} " == *" $who "* ]] && ! [ "${keep_unowned_tasks}" ]; then
 						log "$who logged out"
+						local id
 						for id in ${!own[@]}; do
 							[ "${own[$id]}" == "$who" ] && discard_owned_asset $id
 						done
 					fi
 
 				elif [[ $info =~ $regex_rename ]]; then
-					who=${BASH_REMATCH[1]}
-					new=${BASH_REMATCH[2]}
+					local who=${BASH_REMATCH[1]}
+					local new=${BASH_REMATCH[2]}
 
 					if [[ " ${own[@]} " == *" $who "* ]]; then
 						log "$who renamed as $new, transfer ownerships..."
+						local id
 						for id in ${!own[@]}; do
 							[ "${own[$id]}" == "$who" ] && own[$id]=$new
 						done
@@ -193,7 +201,7 @@ worker_routine() {
 					fi
 
 				elif [[ $info =~ $regex_login ]]; then
-					who=${BASH_REMATCH[1]}
+					local who=${BASH_REMATCH[1]}
 
 					if [[ " ${broker[@]} " == *" $who "* ]]; then
 						log "$who connected, make handshake (protocol 0) with $who..."
@@ -233,6 +241,7 @@ worker_routine() {
 							linked=($(erase_from linked $who))
 						done
 						if ! [ "${keep_unowned_tasks}" ] && (( ${#own[@]} )); then
+							local who id
 							for who in $(printf "%s\n" "${own[@]}" | sort | uniq); do
 								[[ " ${info:5} " == *" $who "* ]] && continue
 								[[ " ${broker[@]} " == *" $who "* ]] && continue
@@ -249,9 +258,9 @@ worker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_others ]]; then
-			who=${BASH_REMATCH[1]}
-			command=${BASH_REMATCH[2]}
-			options=${BASH_REMATCH[3]}
+			local who=${BASH_REMATCH[1]}
+			local command=${BASH_REMATCH[2]}
+			local options=${BASH_REMATCH[3]}
 
 			if [ "$command" == "report" ]; then
 				if [ "$options" == "state" ]; then
@@ -261,6 +270,7 @@ worker_routine() {
 					log "accept report state with requests from $who"
 					notify_state_with_requests $who
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
+					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
 					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$who" ] && [[ -v res[$id] ]] && echo $id; done))
 					log "accept report responses from $who, responses = ($(list_omit ${ids[@]}))"
@@ -281,17 +291,15 @@ worker_routine() {
 					log "accept query linked from $who, linked = ${linked[@]}"
 
 				elif [ "$options" == "capacity" ]; then
-					observe_capacity
-					echo "$who << capacity = ${capacity_this}"
-					log "accept query capacity from $who, capacity = ${capacity_this}"
+					echo "$who << capacity = ${state[1]#*/}"
+					log "accept query capacity from $who, capacity = ${state[1]#*/}"
 
 				elif [ "$options" == "loading" ]; then
-					observe_capacity
-					local num_requests=$((${#cmd[@]} - ${#res[@]}))
-					echo "$who << loading = ${num_requests}/${capacity_this}"
-					log "accept query loading from $who, loading = ${num_requests}/${capacity_this}"
+					echo "$who << loading = ${state[1]}"
+					log "accept query loading from $who, loading = ${state[1]}"
 
 				elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
+					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
 					ids=($(for id in ${ids[@]}; do [[ -v cmd[$id] ]] && echo $id; done))
 					echo "$who << jobs = (${ids[@]})"
@@ -305,6 +313,7 @@ worker_routine() {
 					log "accept query jobs from $who, jobs = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(request|assign)s?(.*)$ ]] ; then
+					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
 					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$who" ] && ! [[ -v res[$id] ]] && echo $id; done))
 					echo "$who << requests = (${ids[@]})"
@@ -314,6 +323,7 @@ worker_routine() {
 					log "accept query requests from $who, requests = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
+					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
 					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$who" ] && [[ -v res[$id] ]] && echo $id; done))
 					echo "$who << responses = (${ids[@]})"
@@ -323,7 +333,8 @@ worker_routine() {
 					log "accept query responses from $who, responses = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
-					list_args ${BASH_REMATCH[2]:-"$@" $(common_vars) ${set_var[@]}} >/dev/null
+					local vars=() args=()
+					list_args ${BASH_REMATCH[2]:-${set_vars[@]}} >/dev/null
 					echo "$who << options = (${vars[@]})"
 					[[ ${args[@]} ]] && printf "$who << # %s\n" "${args[@]}"
 					log "accept query options from $who, options = ($(list_omit ${vars[@]}))"
@@ -332,7 +343,7 @@ worker_routine() {
 					echo "$who << accept query envinfo"
 					log "accept query envinfo from $who"
 					{
-						envinfo=$(list_envinfo)
+						local envinfo=$(list_envinfo)
 						echo "$who << result envinfo ($(<<<$envinfo wc -l))"
 						<<< $envinfo xargs -r -d'\n' -L1 echo "$who << #"
 					} &
@@ -341,14 +352,14 @@ worker_routine() {
 				fi
 
 			elif [ "$command" == "set" ]; then
-				var=(${options/=/ })
-				val=${options:${#var}+1}
-				set_var+=($var)
+				local var=(${options/=/ })
+				local val=${options:${#var}+1}
 				local show_val="$var[@]"
 				local val_old="${!show_val}"
 				eval $var="$val"
 				echo "$who << accept set ${var}${val:+=${val}}"
 				log "accept set ${var}${val:+=\"${val}\"} from $who"
+				set_vars+=($var)
 
 				if [ "$var" == "broker" ]; then
 					change_broker "$val_old" "${broker//:/ }"
@@ -360,14 +371,14 @@ worker_routine() {
 				fi
 
 			elif [ "$command" == "unset" ]; then
-				var=(${options/=/ })
-				set_var+=($var)
-				regex_forbidden_unset="^(worker|state|linked)$"
+				local regex_forbidden_unset="^(worker|state|linked)$"
+				local var=(${options/=/ })
+				set_vars+=($var)
 
 				if [ "$var" ] && ! [[ $var =~ $regex_forbidden_unset ]]; then
 					local show_val="$var[@]"
 					local val_old="${!show_val}"
-					unset $var
+					eval $var=
 					echo "$who << accept unset $var"
 					log "accept unset $var from $who"
 
@@ -389,7 +400,8 @@ worker_routine() {
 					echo "$who << confirm restart"
 					log "accept operate restart from $who"
 					log "$worker is restarting..."
-					list_args "$@" $(common_vars) ${set_var[@]} >/dev/null
+					local vars=() args=()
+					list_args ${set_vars[@]} >/dev/null
 					exec $0 "${args[@]}"
 
 				else
@@ -401,6 +413,7 @@ worker_routine() {
 				echo "$who << accept execute shell {$options}"
 				log "accept execute shell {$options} from $who"
 				{
+					local output code lines
 					output=$(eval "$options" 2>&1)
 					code=$?
 					lines=$((${#output} ? $(<<<$output wc -l) : 0))
@@ -419,6 +432,7 @@ worker_routine() {
 			log "ignore message: $message"
 		fi
 
+		local id code output
 		while (( ${#cmd[@]} )) && fetch_response; do
 			if [[ -v cmd[$id] ]] && [[ -v own[$id] ]]; then
 				res[$id]=$code:$output
@@ -463,12 +477,12 @@ init_system_fd() {
 }
 
 discard_owned_asset() {
-	local id=${1:?id} cmd_pid
+	local id=${1:?id}
 	if [[ -v res[$id] ]]; then
 		log "discard request $id and response $id"
 	elif [[ -v pid[$id] ]]; then
 		log "discard and terminate request $id"
-		cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
+		local cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
 		[[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null
 	fi
 	unset own[$id] cmd[$id] res[$id] pid[$id]
@@ -494,29 +508,19 @@ change_broker() {
 	broker=(${pending[@]})
 }
 
-observe_capacity() {
-	local capacity_last=$capacity_this
-	local capacity_src=$capacity
-	if ! [[ $capacity_src =~ ^[0-9]+$ ]] && [ -e "$capacity_src" ]; then
-		local capacity_out=$(bash "$capacity_src" $worker 2>/dev/null)
-		if ! [[ $capacity_out =~ ^[0-9]+$ ]]; then
-			log "failed to observe capacity with $capacity_src"
-			capacity_out=0
-		fi
-		capacity_src=$capacity_out
-	fi
-	capacity_this=${capacity_src:-$(nproc)}
-	[ "$capacity_this" != "$capacity_last" ]
-	return $?
-}
-
 observe_state() {
 	local state_last=${state[@]}
-	observe_capacity
+	local capacity=${capacity:-$(nproc)}
+	if ! [[ $capacity =~ ^[0-9]+$ ]] && [ -e "$capacity" ]; then
+		if ! [[ $(bash "$capacity" $worker 2>/dev/null) =~ ^([0-9]+)$ ]]; then
+			log "failed to observe capacity with $capacity"
+		fi
+		capacity=${BASH_REMATCH[1]:-0}
+	fi
 	local stat="idle"
 	local num_requests=$((${#cmd[@]} - ${#res[@]}))
-	(( ${num_requests} >= ${capacity_this} )) && stat="busy"
-	state=($stat ${num_requests}/${capacity_this})
+	(( ${num_requests} >= ${capacity} )) && stat="busy"
+	state=($stat ${num_requests}/${capacity})
 	local state_this=${state[@]}
 	[ "$state_this" != "$state_last" ]
 	return $?
@@ -542,17 +546,13 @@ refresh_state() {
 	[ "$state" != "init" ] && observe_state && notify_state
 }
 
-common_vars() {
-	echo broker worker capacity logfile
-}
-
 init_system_io() {
-	conn_count=${conn_count:-0}
+	io_count=${io_count:-0}
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		local addr=${BASH_REMATCH[1]}
 		local port=${BASH_REMATCH[2]}
-		local wait_for_conn=0
-		while (( $((conn_count++)) < ${max_conn_count:-65536} )); do
+		local nc wait_for_conn=0
+		while (( $((io_count++)) < ${max_io_count:-65536} )); do
 			log "connect to chat system at $addr:$port..."
 			sleep ${wait_for_conn:-0}
 			if { exec {nc}<>/dev/tcp/$addr/$port; } 2>/dev/null; then
@@ -562,7 +562,7 @@ init_system_io() {
 			log "failed to connect $addr:$port, host down?"
 			wait_for_conn=60
 		done
-	elif (( $((conn_count++)) < ${max_conn_count:-1} )); then
+	elif (( $((io_count++)) < ${max_io_count:-1} )); then
 		return 0
 	fi
 	log "max number of connections is reached"
@@ -649,8 +649,8 @@ list_envinfo() (
 	echo "RAM: $(printf "%.1fG" $size)"
 )
 
-init_logfile() {
-	for var in "$@"; do declare "$var" 2>/dev/null; done
+init_logging() {
+	declare "$@" >/dev/null 2>&1
 	declare -g session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
 	declare -g logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
 	exec 3>> $logfile
@@ -663,5 +663,7 @@ init_logfile() {
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
 
 #### script main routine ####
-init_logfile "$@"
-worker_main "$@"
+if [ "$0" == "$BASH_SOURCE" ]; then
+	init_logging "$@"
+	worker_main "$@"
+fi

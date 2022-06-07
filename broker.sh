@@ -1,13 +1,12 @@
 #!/bin/bash
 
 broker_main() {
-	log "broker version 2022-06-06 (protocol 0)"
-	for var in "$@"; do declare "$var" 2>/dev/null; done
-
-	broker=${broker:-broker}
-	capacity=${capacity-65536}
-	default_timeout=${default_timeout:-0}
-	default_workers=${default_workers}
+	log "broker version 2022-06-08 (protocol 0)"
+	declare "$@" >/dev/null 2>&1
+	declare broker=${broker:-broker}
+	declare capacity=${capacity-65536}
+	declare default_timeout=${default_timeout:-0}
+	declare default_workers=${default_workers}
 
 	declare -A own # [id]=requester
 	declare -A cmd # [id]=command
@@ -21,11 +20,16 @@ broker_main() {
 	declare -A notify # [type]=subscriber...
 	declare -a queue # id...
 
-	list_args "$@" $(common_vars) | while IFS= read -r opt; do log "option: $opt"; done
+	local vars=() args=() opt info
+	list_args broker capacity "$@" logfile | while IFS= read -r opt; do log "option: $opt"; done
 	list_envinfo | while IFS= read -r info; do log "platform $info"; done
 
 	trap 'log "${broker:-broker} has been interrupted"; exit 64' INT
 	trap 'log "${broker:-broker} has been terminated"; exit 64' TERM
+
+	declare set_vars=(${vars[@]})
+	declare id_next=1
+	declare io_count=0
 
 	while init_system_io "$@"; do
 		broker_routine "$@"
@@ -38,7 +42,13 @@ broker_main() {
 }
 
 broker_routine() {
-	local overview=()
+	declare -a overview=() # idle 16/128 48/65536 16+32+0
+	declare -a system_state=() # idle 16/128
+	declare -a system_status=() # idle 16/128 48/65536 16+32+0 [A]=idle:2/4 [B]=idle:8/16 ...
+	declare -a system_capacity=() # 128 65536 [A]=4 [B]=16 ...
+	declare -a size_details=() # [A]=4 [B]=16 ...
+	declare -a load_details=() # [A]=2/4 [B]=8/16 ...
+	declare -a stat_details=() # [A]=idle:2/4 [B]=idle:8/16 ...
 
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
@@ -50,24 +60,26 @@ broker_routine() {
 	local regex_others="^(\S+) >> (query|terminate|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
 	local regex_chat_system="^(#|%) (.+)$"
 
+	local message
 	while input message; do
 		if [[ $message =~ $regex_request ]]; then
-			requester=${BASH_REMATCH[1]}
-			id=${BASH_REMATCH[4]}
-			command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
-			options=${BASH_REMATCH[8]}
+			local requester=${BASH_REMATCH[1]}
+			local id=${BASH_REMATCH[4]}
+			local command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
+			local options=${BASH_REMATCH[8]}
+
 			if [ "${overview:-full}" != "full" ]; then
 				if [[ $id ]]; then
-					reply="$id"
+					local reply="$id"
 				else
 					id=${id_next:-1}
 					while [[ -v own[$id] ]]; do id=$((id+1)); done
-					reply="$id {$command}"
+					local reply="$id {$command}"
 				fi
 				if ! [[ -v own[$id] ]]; then
 					own[$id]=$requester
 					cmd[$id]=$command
-					unset with tmz pfz
+					local with= tmz= pfz=
 					[[ $options =~ timeout=([0-9]+.*) ]] && tmz=${BASH_REMATCH[1]} || tmz=$default_timeout
 					[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]} || pfz=$default_workers
 					if [[ ${tmz:-0} != 0* ]]; then
@@ -84,7 +96,7 @@ broker_routine() {
 						tmdue[$id]=$(($(date +%s%3N)+$tmz))
 					fi
 					if [[ $pfz ]]; then
-						with+=${with:+ }prefer=$pfz
+						with+=${with:+ }worker=$pfz
 						prefer[$id]=$pfz
 					fi
 					queue+=($id)
@@ -103,10 +115,10 @@ broker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_response ]]; then
-			worker=${BASH_REMATCH[1]}
-			id=${BASH_REMATCH[2]}
-			code=${BASH_REMATCH[3]}
-			output=${BASH_REMATCH[4]}
+			local worker=${BASH_REMATCH[1]}
+			local id=${BASH_REMATCH[2]}
+			local code=${BASH_REMATCH[3]}
+			local output=${BASH_REMATCH[4]}
 
 			if [ "${assign[$id]}" == "$worker" ]; then
 				unset assign[$id] tmdue[$id]
@@ -128,47 +140,47 @@ broker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_worker_state ]]; then
-			worker=${BASH_REMATCH[1]}
-			stat=${BASH_REMATCH[2]}
-			load=${BASH_REMATCH[3]}
+			local worker=${BASH_REMATCH[1]}
+			local stat=${BASH_REMATCH[2]} stat_last=${state[$worker]:0:4}
+			local load=${BASH_REMATCH[3]}
 			echo "$worker << confirm state $stat $load"
 			log "confirm that $worker state $stat $load"
-			current_stat=${state[$worker]:0:4}
-			[ "$current_stat" == "hold" ] && stat="hold"
+			[ "$stat_last" == "hold" ] && stat="hold"
 			state[$worker]=$stat:$load
-			if [ "$current_stat" != "$stat" ] && (( ${#notify[$stat]} )); then
+			if [ "$stat_last" != "$stat" ] && (( ${#notify[$stat]} )); then
 				printf "%s << notify $worker state $stat\n" ${notify[$stat]}
 				log "state has been changed, notify ${notify[$stat]}"
 			fi
 
 		elif [[ $message =~ $regex_confirm ]]; then
-			who=${BASH_REMATCH[1]}
-			confirm=${BASH_REMATCH[2]}
-			type=${BASH_REMATCH[3]}
-			id=${BASH_REMATCH[4]}
+			local who=${BASH_REMATCH[1]}
+			local confirm=${BASH_REMATCH[2]}
+			local type=${BASH_REMATCH[3]}
+			local id=${BASH_REMATCH[4]}
 
 			if [[ $id =~ ^[0-9]+$ ]]; then
-				ids=($id)
+				local ids=($id)
 				if [ "$type" == "response" ]; then
-					owner=${own[$id]}
+					local owner=${own[$id]}
 				elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
-					owner=${assign[$id]}
+					local owner=${assign[$id]}
 				fi
 			else
-				regex=${id}
+				local regex=${id}
 				regex=${regex//\*/.*}
 				regex=${regex//\?/.}
 				regex=^$regex=$who$
 				if [ "$type" == "response" ]; then
-					ids=($(for id in ${!own[@]}; do
+					local ids=($(for id in ${!own[@]}; do
 						[[ $id=${own[$id]} =~ $regex ]] && echo $id
 					done | sort))
 				elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
-					ids=($(for id in ${!assign[@]}; do
+					local ids=($(for id in ${!assign[@]}; do
 						[[ $id=${assign[$id]} =~ $regex ]] && echo $id
 					done | sort))
 				fi
-				(( ${#ids[@]} )) && owner=$who || owner=
+				local owner=
+				(( ${#ids[@]} )) && owner=$who
 			fi
 
 			if [ "$owner" == "$who" ]; then
@@ -212,19 +224,20 @@ broker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_chat_system ]]; then
-			type=${BASH_REMATCH[1]}
-			info=${BASH_REMATCH[2]}
+			local type=${BASH_REMATCH[1]}
+			local info=${BASH_REMATCH[2]}
 
 			if [ "$type" == "#" ]; then
-				regex_logout="^logout: (\S+)$"
-				regex_rename="^name: (\S+) becomes (\S+)$"
+				local regex_logout="^logout: (\S+)$"
+				local regex_rename="^name: (\S+) becomes (\S+)$"
 
 				if [[ $info =~ $regex_logout ]]; then
-					who=${BASH_REMATCH[1]}
+					local who=${BASH_REMATCH[1]}
 					log "$who logged out"
 					if [[ -v state[$who] ]]; then
 						discard_workers $who
 					fi
+					local id
 					for id in ${!own[@]}; do
 						if [ "${own[$id]}" == "$who" ] && ! [ "${keep_unowned_tasks}" ]; then
 							unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id]
@@ -242,6 +255,7 @@ broker_routine() {
 							fi
 						fi
 					done
+					local item
 					for item in ${!notify[@]}; do
 						if [[ " ${notify[$item]} " == *" $who "* ]]; then
 							notify[$item]=$(printf "%s\n" ${notify[$item]} | sed "/^${who}$/d")
@@ -251,14 +265,15 @@ broker_routine() {
 					done
 
 				elif [[ $info =~ $regex_rename ]]; then
-					who=${BASH_REMATCH[1]}
-					new=${BASH_REMATCH[2]}
+					local who=${BASH_REMATCH[1]}
+					local new=${BASH_REMATCH[2]}
 					if [ "$new" != "$broker" ]; then
 						log "$who renamed as $new"
 						if [[ -v state[$who] ]]; then
 							state[$new]=${state[$who]}
 							unset state[$who]
 							log "transfer the worker state to $new"
+							local id
 							for id in ${!assign[@]}; do
 								if [ "${assign[$id]}" == "$who" ]; then
 									log "transfer the ownership of assignment $id"
@@ -266,12 +281,14 @@ broker_routine() {
 								fi
 							done
 						fi
+						local id
 						for id in ${!own[@]}; do
 							if [ "${own[$id]}" == "$who" ]; then
 								log "transfer the ownerships of request $id and response $id"
 								own[$id]=$new
 							fi
 						done
+						local item
 						for item in ${!notify[@]}; do
 							if [[ " ${notify[$item]} " == *" $who "* ]]; then
 								log "transfer the $item subscription to $new"
@@ -303,9 +320,9 @@ broker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_others ]]; then
-			who=${BASH_REMATCH[1]}
-			command=${BASH_REMATCH[2]}
-			options=${BASH_REMATCH[3]}
+			local who=${BASH_REMATCH[1]}
+			local command=${BASH_REMATCH[2]}
+			local options=${BASH_REMATCH[3]}
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
@@ -334,7 +351,7 @@ broker_routine() {
 					    "state = ${system_status[@]:0:4} ($(list_omit ${system_status[@]:4}))"
 
 				elif [[ "$options" =~ ^(assign(ment)?)s?$ ]]; then
-					assignment=()
+					local assignment=() id
 					for id in ${!assign[@]}; do
 						[ "${own[$id]}" == "$who" ] && assignment+=("[$id]=${assign[$id]}")
 					done
@@ -342,16 +359,18 @@ broker_routine() {
 					log "accept query assign from $who, assign = ($(list_omit ${assignment[@]}))"
 
 				elif [[ "$options" =~ ^(worker)s?(.*)$ ]]; then
+					local workers=() worker
 					workers=(${BASH_REMATCH[2]:-$(<<< ${!state[@]} xargs -r printf "%s\n" | sort)})
 					workers=($(for worker in ${workers[@]}; do [[ -v state[$worker] ]] && echo $worker; done))
 					echo "$who << workers = (${workers[@]})"
 					for worker in ${workers[@]}; do
-						num_assign=$(<<<" ${assign[@]} " grep -o " $worker " | wc -l)
+						local num_assign=$(<<<" ${assign[@]} " grep -o " $worker " | wc -l)
 						echo "$who << # $worker ${state[$worker]} $num_assign assigned"
 					done
 					log "accept query workers from $who, workers = ($(list_omit ${workers[@]}))"
 
 				elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
+					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
 					ids=($(for id in ${ids[@]}; do [[ -v cmd[$id] ]] && echo $id; done))
 					echo "$who << jobs = (${ids[@]})"
@@ -361,7 +380,7 @@ broker_routine() {
 						elif [[ -v assign[$id] ]]; then
 							echo "$who << # $id {${cmd[$id]}} [${own[$id]}] @ ${assign[$id]}"
 						else
-							rank=0
+							local rank=0
 							while ! [ ${queue[$((rank++))]:-$id} == $id ]; do :; done
 							echo "$who << # $id {${cmd[$id]}} [${own[$id]}] @ #$rank"
 						fi
@@ -369,6 +388,7 @@ broker_routine() {
 					log "accept query jobs from $who, jobs = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(request)s?(.*)$ ]] ; then
+					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
 					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$who" ] && ! [[ -v res[$id] ]] && echo $id; done))
 					echo "$who << requests = (${ids[@]})"
@@ -376,7 +396,7 @@ broker_routine() {
 						if [[ -v assign[$id] ]]; then
 							echo "$who << # request $id {${cmd[$id]}} @ ${assign[$id]}"
 						else
-							rank=0
+							local rank=0
 							while ! [ ${queue[$((rank++))]:-$id} == $id ]; do :; done
 							echo "$who << # request $id {${cmd[$id]}} @ #$rank"
 						fi
@@ -384,6 +404,7 @@ broker_routine() {
 					log "accept query requests from $who, requests = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
+					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
 					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$who" ] && [[ -v res[$id] ]] && echo $id; done))
 					echo "$who << responses = (${ids[@]})"
@@ -393,7 +414,8 @@ broker_routine() {
 					log "accept query responses from $who, responses = ($(list_omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
-					list_args ${BASH_REMATCH[2]:-"$@" $(common_vars) ${set_var[@]}} >/dev/null
+					local vars=() args=()
+					list_args ${BASH_REMATCH[2]:-${set_vars[@]}} >/dev/null
 					echo "$who << options = (${vars[@]})"
 					[[ ${args[@]} ]] && printf "$who << # %s\n" "${args[@]}"
 					log "accept query options from $who, options = ($(list_omit ${vars[@]}))"
@@ -402,7 +424,7 @@ broker_routine() {
 					echo "$who << accept query envinfo"
 					log "accept query envinfo from $who"
 					{
-						envinfo=$(list_envinfo)
+						local envinfo=$(list_envinfo)
 						echo "$who << result envinfo ($(<<<$envinfo wc -l))"
 						<<< $envinfo xargs -r -d'\n' -L1 echo "$who << #"
 					} &
@@ -411,7 +433,7 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "terminate" ]; then
-				id=$options
+				local id=$options
 				if [[ -v assign[$id] ]]; then
 					if [ "$who" == "${own[$id]}" ]; then
 						echo "${assign[$id]} << terminate $id"
@@ -431,9 +453,9 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "use" ]; then
-				regex_use_protocol="^protocol (\S+)$"
+				local regex_use_protocol="^protocol (\S+)$"
 				if [[ "$options" =~ $regex_use_protocol ]]; then
-					protocol=${BASH_REMATCH[1]}
+					local protocol=${BASH_REMATCH[1]}
 					if [ "$protocol" == "0" ]; then
 						echo "$who << accept protocol $protocol"
 						log "accept use protocol $protocol from $who"
@@ -447,12 +469,13 @@ broker_routine() {
 
 			elif [ "$command" == "subscribe" ]; then
 				if [[ $options =~ ^(state|status|idle|busy|assign|capacity)$ ]]; then
-					item=$options
+					local item=$options
 					notify[$item]=$(printf "%s\n" ${notify[$item]} $who | sort | uniq)
 					news[$item-$who]=subscribe
 					echo "$who << accept $command $options"
 					log "accept $command $options from $who"
 					if [ "$item" == "idle" ] || [ "$item" == "busy" ]; then
+						local worker
 						for worker in ${!state[@]}; do
 							if [ "${state[$worker]%:*}" == "$item" ]; then
 								echo "$who << notify $worker state $item"
@@ -475,7 +498,7 @@ broker_routine() {
 
 			elif [ "$command" == "unsubscribe" ]; then
 				if [[ $options =~ ^(state|status|idle|busy|assign|capacity)$ ]]; then
-					item=$options
+					local item=$options
 					notify[$item]=$(<<< ${notify[$item]} xargs -r printf "%s\n" | sed "/^${who}$/d")
 					unset news[$item-$who]
 					echo "$who << accept $command $options"
@@ -486,14 +509,14 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "set" ]; then
-				var=(${options/=/ })
-				val=${options:${#var}+1}
-				set_var+=($var)
+				local var=(${options/=/ })
+				local val=${options:${#var}+1}
 				local show_val="$var[@]"
 				local val_old="${!show_val}"
 				eval $var="$val"
 				echo "$who << accept set ${var}${val:+=${val}}"
 				log "accept set ${var}${val:+=\"${val}\"} from $who"
+				set_vars+=($var)
 
 				if [ "$var" == "broker" ]; then
 					log "broker who has been changed, register $broker on the chat system..."
@@ -503,13 +526,13 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "unset" ]; then
-				var=(${options/=/ })
-				set_var+=($var)
-				regex_forbidden_unset="^(broker)$"
+				local regex_forbidden_unset="^(broker)$"
+				local var=(${options/=/ })
+				set_vars+=($var)
 
 				if [ "$var" ] && ! [[ $var =~ $regex_forbidden_unset ]]; then
 					echo "$who << accept unset $var"
-					unset $var
+					eval $var=
 					log "accept unset $var from $who"
 
 				elif [ "$var" ]; then
@@ -517,12 +540,13 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "operate" ]; then
-				regex_operate_power="^(shutdown|restart) ?(.*)$"
-				regex_operate_workers="^(contact|discard) ?(.*)$"
+				local regex_operate_power="^(shutdown|restart) ?(.*)$"
+				local regex_operate_workers="^(contact|discard) ?(.*)$"
 
 				if [[ "$options" =~ $regex_operate_power ]]; then
-					type=${BASH_REMATCH[1]}
-					patt=${BASH_REMATCH[2]:-$broker}
+					local type=${BASH_REMATCH[1]}
+					local patt=${BASH_REMATCH[2]:-$broker}
+					local matches=() match client
 					matches=( $(<<<$patt grep -Eo '\S+' | while IFS= read -r match; do
 						for client in ${!state[@]} $broker; do
 							[[ $client == $match ]] && echo $client
@@ -531,6 +555,7 @@ broker_routine() {
 					declare -A targets
 					for match in ${matches[@]}; do targets[$match]=$type; done
 
+					local target
 					for target in ${!targets[@]}; do
 						if [[ -v state[$target] ]]; then
 							echo "$who << confirm $type $target"
@@ -545,15 +570,16 @@ broker_routine() {
 							return 0
 						elif [ "$type" == "restart" ]; then
 							log "$broker is restarting..."
-							list_args "$@" $(common_vars) ${set_var[@]} >/dev/null
+							local vars=() args=()
+							list_args ${set_vars[@]} >/dev/null
 							exec $0 "${args[@]}"
 						fi
 					fi
 					unset targets
 
 				elif [[ "$options" =~ $regex_operate_workers ]]; then
-					type=${BASH_REMATCH[1]}
-					patt=${BASH_REMATCH[2]:-"*"}
+					local type=${BASH_REMATCH[1]}
+					local patt=${BASH_REMATCH[2]:-"*"}
 
 					if [ "$type" == "contact" ]; then
 						log "accept operate $type $patt from $who"
@@ -562,6 +588,7 @@ broker_routine() {
 
 					elif [ "$type" == "discard" ]; then
 						log "accept operate $type $patt from $who"
+						local workers=() match client
 						workers=( $(<<<$patt grep -Eo '\S+' | while IFS= read -r match; do
 							for client in ${!state[@]}; do
 								[[ $client == $match ]] && echo $client
@@ -582,6 +609,7 @@ broker_routine() {
 				echo "$who << accept execute shell {$options}"
 				log "accept execute shell {$options} from $who"
 				{
+					local output code lines
 					output=$(eval "$options" 2>&1)
 					code=$?
 					lines=$((${#output} ? $(<<<$output wc -l) : 0))
@@ -595,9 +623,10 @@ broker_routine() {
 
 		elif ! [ "$message" ]; then
 			current=$(date +%s%3N)
+			local id
 			for id in ${!tmdue[@]}; do
 				if (( $current > ${tmdue[$id]} )); then
-					due=${tmdue[$id]}
+					local due=${tmdue[$id]}
 					log "request $id failed due to timeout" \
 					    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), notify ${own[$id]}"
 					if [[ -v assign[$id] ]]; then
@@ -607,8 +636,8 @@ broker_routine() {
 						queue=($(erase_from queue $id))
 					fi
 					unset assign[$id] tmdue[$id]
-					code="timeout"
-					output=
+					local code="timeout"
+					local output=
 					res[$id]=$code:$output
 					echo "${own[$id]} << response $id $code {$output}"
 				fi
@@ -741,7 +770,6 @@ observe_capacity() {
 }
 
 refresh_observations() {
-	local size_details load_details stat_details
 	observe_overview
 	if (( ${#notify[state]} )) && observe_state; then
 		local notify_state=${system_state[@]}
@@ -761,10 +789,8 @@ refresh_observations() {
 }
 
 contact_workers() {
-	local worker
-	for worker in "$@"; do
-		echo "$worker << report state"
-	done
+	(( "$#" )) || return
+	printf "%s << report state\n" "$@"
 	log "contact $@ for worker state"
 }
 
@@ -784,17 +810,13 @@ discard_workers() {
 	done
 }
 
-common_vars() {
-	echo broker capacity logfile
-}
-
 init_system_io() {
-	conn_count=${conn_count:-0}
+	io_count=${io_count:-0}
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		local addr=${BASH_REMATCH[1]}
 		local port=${BASH_REMATCH[2]}
-		local wait_for_conn=0
-		while (( $((conn_count++)) < ${max_conn_count:-65536} )); do
+		local nc wait_for_conn=0
+		while (( $((io_count++)) < ${max_io_count:-65536} )); do
 			log "connect to chat system at $addr:$port..."
 			sleep ${wait_for_conn:-0}
 			if { exec {nc}<>/dev/tcp/$addr/$port; } 2>/dev/null; then
@@ -804,7 +826,7 @@ init_system_io() {
 			log "failed to connect $addr:$port, host down?"
 			wait_for_conn=60
 		done
-	elif (( $((conn_count++)) < ${max_conn_count:-1} )); then
+	elif (( $((io_count++)) < ${max_io_count:-1} )); then
 		return 0
 	fi
 	log "max number of connections is reached"
@@ -891,8 +913,8 @@ list_envinfo() (
 	echo "RAM: $(printf "%.1fG" $size)"
 )
 
-init_logfile() {
-	for var in "$@"; do declare "$var" 2>/dev/null; done
+init_logging() {
+	declare "$@" >/dev/null 2>&1
 	declare -g session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
 	declare -g logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
 	exec 3>> $logfile
@@ -905,5 +927,7 @@ init_logfile() {
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
 
 #### script main routine ####
-init_logfile "$@"
-broker_main "$@"
+if [ "$0" == "$BASH_SOURCE" ]; then
+	init_logging "$@"
+	broker_main "$@"
+fi
