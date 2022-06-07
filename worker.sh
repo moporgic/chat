@@ -345,7 +345,7 @@ worker_routine() {
 				val=${options:${#var}+1}
 				set_var+=($var)
 				local show_val="$var[@]"
-				eval val_old="${!show_val}"
+				local val_old="${!show_val}"
 				eval $var="$val"
 				echo "$who << accept set ${var}${val:+=${val}}"
 				log "accept set ${var}${val:+=\"${val}\"} from $who"
@@ -480,7 +480,7 @@ change_broker() {
 	local who id
 	for who in ${current[@]}; do added=($(erase_from added $who)); done
 	for who in ${pending[@]}; do removed=($(erase_from removed $who)); done
-	log "$name << confirm broker change: (${current[@]}) --> (${pending[@]})"
+	log "confirm broker change: (${current[@]}) --> (${pending[@]})"
 	for id in ${!own[@]}; do
 		[[ " ${removed[@]} " == *" ${own[$id]} "* ]] && discard_owned_asset $id
 	done
