@@ -22,8 +22,9 @@ worker_main() {
 	local vars=() args=()
 	list_args "$@" broker worker capacity logfile >/dev/null
 	declare set_vars=(${vars[@]})
-	declare id_next=1
-	declare io_count=0
+	declare id_next
+	declare io_count
+	declare tcp_fd
 	declare res_fd
 
 	while init_system_io "$@" && init_system_fd "$@"; do
@@ -403,6 +404,7 @@ worker_routine() {
 					log "$worker is restarting..."
 					local vars=() args=()
 					list_args ${set_vars[@]} >/dev/null
+					[[ $tcp_fd ]] && exec 0<&- 1>&-
 					exec $0 "${args[@]}"
 
 				else
@@ -552,13 +554,13 @@ init_system_io() {
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		local addr=${BASH_REMATCH[1]}
 		local port=${BASH_REMATCH[2]}
-		local nc wait_for_conn=0
+		local wait_for_conn=0
 		while (( $((io_count++)) < ${max_io_count:-65536} )); do
 			log "connect to chat system at $addr:$port..."
 			sleep ${wait_for_conn:-0}
-			if { exec {nc}<>/dev/tcp/$addr/$port; } 2>/dev/null; then
+			if { exec {tcp_fd}<>/dev/tcp/$addr/$port; } 2>/dev/null; then
 				log "connected to chat system successfully"
-				exec 0<&$nc 1>&$nc {nc}<&- {nc}>&- && return 0
+				exec 0<&$tcp_fd 1>&$tcp_fd {tcp_fd}>&- && return 0
 			fi
 			log "failed to connect $addr:$port, host down?"
 			wait_for_conn=60
