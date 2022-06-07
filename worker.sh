@@ -13,13 +13,14 @@ worker_main() {
 	declare -A res # [id]=code:output
 	declare -A pid # [id]=PID
 
-	local vars=() args=() opt info
 	list_args broker worker capacity "$@" logfile | while IFS= read -r opt; do log "option: $opt"; done
 	list_envinfo | while IFS= read -r info; do log "platform $info"; done
 
 	trap 'log "${worker:-worker} has been interrupted"; exit 64' INT
 	trap 'log "${worker:-worker} has been terminated"; exit 64' TERM
 
+	local vars=() args=()
+	list_args "$@" broker worker capacity logfile >/dev/null
 	declare set_vars=(${vars[@]})
 	declare id_next=1
 	declare io_count=0

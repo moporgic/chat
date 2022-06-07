@@ -20,13 +20,14 @@ broker_main() {
 	declare -A notify # [type]=subscriber...
 	declare -a queue # id...
 
-	local vars=() args=() opt info
 	list_args broker capacity "$@" logfile | while IFS= read -r opt; do log "option: $opt"; done
 	list_envinfo | while IFS= read -r info; do log "platform $info"; done
 
 	trap 'log "${broker:-broker} has been interrupted"; exit 64' INT
 	trap 'log "${broker:-broker} has been terminated"; exit 64' TERM
 
+	local vars=() args=()
+	list_args "$@" broker capacity logfile >/dev/null
 	declare set_vars=(${vars[@]})
 	declare id_next=1
 	declare io_count=0
