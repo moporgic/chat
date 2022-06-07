@@ -366,7 +366,7 @@ worker_routine() {
 
 				if [ "$var" ] && ! [[ $var =~ $regex_forbidden_unset ]]; then
 					local show_val="$var[@]"
-					declare val_old="${!show_val}"
+					local val_old="${!show_val}"
 					unset $var
 					echo "$who << accept unset $var"
 					log "accept unset $var from $who"
@@ -523,15 +523,19 @@ observe_state() {
 }
 
 notify_state() {
+	local linked=${@:-${linked[@]}}
+	[[ $linked ]] || return
 	local status=${state[@]}
-	printf "%s << state $status\n" ${@:-${linked[@]}}
-	log "state $status; notify ${@:-${linked[@]}}"
+	printf "%s << state $status\n" $linked
+	log "state $status; notify $linked"
 }
 
 notify_state_with_requests() {
+	local linked=${@:-${linked[@]}}
+	[[ $linked ]] || return
 	local status="${state[@]} (${!cmd[@]})"
-	printf "%s << state $status\n" ${@:-${linked[@]}}
-	log "state $status; notify ${@:-${linked[@]}}"
+	printf "%s << state $status\n" $linked
+	log "state $status; notify $linked"
 }
 
 refresh_state() {
