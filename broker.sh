@@ -5,7 +5,7 @@ broker_main() {
 	for var in "$@"; do declare "$var" 2>/dev/null; done
 
 	broker=${broker:-broker}
-	capacity=${capacity:-65536}
+	capacity=${capacity-65536}
 	default_timeout=${default_timeout:-0}
 	default_workers=${default_workers}
 
@@ -38,6 +38,8 @@ broker_main() {
 }
 
 broker_routine() {
+	local overview=()
+
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
 
@@ -54,7 +56,7 @@ broker_routine() {
 			id=${BASH_REMATCH[4]}
 			command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
 			options=${BASH_REMATCH[8]}
-			if (( $((${#cmd[@]} - ${#res[@]})) < ${capacity:-65536} )); then
+			if [ "${overview:-full}" != "full" ]; then
 				if [[ $id ]]; then
 					reply="$id"
 				else
@@ -488,7 +490,7 @@ broker_routine() {
 				val=${options:${#var}+1}
 				set_var+=($var)
 				local show_val="$var[@]"
-				eval val_old="${!show_val}"
+				local val_old="${!show_val}"
 				eval $var="$val"
 				echo "$who << accept set ${var}${val:+=${val}}"
 				log "accept set ${var}${val:+=\"${val}\"} from $who"
@@ -672,11 +674,14 @@ extract_anchor_cost() {
 
 observe_overview() {
 	local overview_last=${overview[@]}
+
 	overview=() # idle 16/128 48/65536 16+32+0
 	size_details=() # [A]=4 [B]=16 ...
 	load_details=() # [A]=2/4 [B]=8/16 ...
 	stat_details=() # [A]=idle:2/4 [B]=idle:8/16 ...
-	local stat load size load_total=0 size_total=0
+
+	local load_total=0 size_total=0
+	local worker stat load size
 	for worker in ${!state[@]}; do
 		stat=${state[$worker]}
 		load=${stat:5}
@@ -688,12 +693,21 @@ observe_overview() {
 		load_details+=("[$worker]=$load/$size")
 		size_details+=("[$worker]=$size")
 	done
-	local stat="idle" size_limit=$size_total
+
+	local capacity=$capacity size_limit=$size_total
+	[[ $capacity =~ ^[0-9]+$ ]] || capacity=$(($size_total $capacity))
 	(( $size_limit >= $capacity )) && size_limit=$capacity
+
+	local num_requests=$((${#cmd[@]} - ${#res[@]}))
+	local num_assigned=$((num_requests - ${#queue[@]}))
+	local stat="idle"
 	(( $load_total >= $size_limit )) && stat="busy"
-	local num_tasks=${load_total}+${#queue[@]}+${#res[@]}
+	(( $num_requests >= $capacity )) && stat="full"
+
 	overview=(${stat} ${load_total}/${size_limit} \
-	          ${#cmd[@]}/${capacity} ${num_tasks})
+	          ${num_requests}/${capacity} \
+	          ${num_assigned}+${#queue[@]}+${#res[@]})
+
 	local overview_this=${overview[@]}
 	[ "$overview_this" != "$overview_last" ]
 	return $?
@@ -717,13 +731,15 @@ observe_status() {
 
 observe_capacity() {
 	local system_capacity_last=${system_capacity[@]}
-	system_capacity=(${overview[1]#*/} $capacity "${size_details[@]}")
+	local size_limit=${overview[1]#*/} capacity=${overview[2]#*/}
+	system_capacity=(${size_limit} ${capacity} "${size_details[@]}")
 	local system_capacity_this=${system_capacity[@]}
 	[ "$system_capacity_this" != "$system_capacity_last" ]
 	return $?
 }
 
 refresh_observations() {
+	local size_details load_details stat_details
 	observe_overview
 	if (( ${#notify[state]} )) && observe_state; then
 		local notify_state=${system_state[@]}
