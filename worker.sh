@@ -232,7 +232,7 @@ worker_routine() {
 							log "$who disconnected, wait until $who come back..."
 							linked=($(erase_from linked $who))
 						done
-						if ! [ "${keep_unowned_tasks}" ]; then
+						if ! [ "${keep_unowned_tasks}" ] && (( ${#own[@]} )); then
 							for who in $(printf "%s\n" "${own[@]}" | sort | uniq); do
 								[[ " ${info:5} " == *" $who "* ]] && continue
 								[[ " ${broker[@]} " == *" $who "* ]] && continue
@@ -325,7 +325,7 @@ worker_routine() {
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
 					list_args ${BASH_REMATCH[2]:-"$@" $(common_vars) ${set_var[@]}} >/dev/null
 					echo "$who << options = (${vars[@]})"
-					printf "$who << # %s\n" "${args[@]}"
+					[[ ${args[@]} ]] && printf "$who << # %s\n" "${args[@]}"
 					log "accept query options from $who, options = ($(list_omit ${vars[@]}))"
 
 				elif [ "$options" == "envinfo" ]; then
@@ -584,7 +584,7 @@ list_args() {
 		args+=("$arg")
 		vars+=("$var")
 	done
-	printf "%s\n" "${args[@]}"
+	[[ ${args[@]} ]] && printf "%s\n" "${args[@]}"
 }
 
 list_omit() {
