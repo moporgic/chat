@@ -164,17 +164,14 @@ broker_routine() {
 					local owner=${assign[$id]}
 				fi
 			else
-				local regex=${id}
-				regex=${regex//\*/.*}
-				regex=${regex//\?/.}
-				regex=^$regex=$who$
+				local patt=$id=$who
 				if [ "$type" == "response" ]; then
 					local ids=($(for id in ${!own[@]}; do
-						[[ $id=${own[$id]} =~ $regex ]] && echo $id
+						[[ $id=${own[$id]} == $patt ]] && echo $id
 					done | sort))
 				elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
 					local ids=($(for id in ${!assign[@]}; do
-						[[ $id=${assign[$id]} =~ $regex ]] && echo $id
+						[[ $id=${assign[$id]} =~ $patt ]] && echo $id
 					done | sort))
 				fi
 				local owner=
