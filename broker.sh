@@ -428,24 +428,38 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "terminate" ]; then
-				local id=$options
-				if [[ -v assign[$id] ]]; then
-					if [ "$who" == "${own[$id]}" ]; then
-						echo "${assign[$id]} << terminate $id"
-						log "accept terminate $id from $who and forward it to ${assign[$id]}"
+				if [[ $options =~ ^[0-9\ ]+$ ]]; then
+					local ids=($options)
+				else
+					local patt=$options=$who
+					local ids=($(for id in ${!own[@]}; do
+						[[ $id=${own[$id]} == $patt ]] && echo $id
+					done | sort))
+				fi
+				local id
+				for id in ${ids[@]}; do
+					if [[ -v assign[$id] ]]; then
+						if [ "$who" == "${own[$id]}" ]; then
+							echo "${assign[$id]} << terminate $id"
+							log "accept terminate $id from $who and forward it to ${assign[$id]}"
+						else
+							echo "$who << reject terminate $id"
+							log "reject terminate $id from $who since it is owned by ${own[$id]}"
+						fi
+					elif [[ -v cmd[$id] ]]; then
+						queue=($(erase_from queue $id))
+						unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id]
+						echo "$who << accept terminate $id"
+						if [[ ! -v res[$id] ]]; then
+							log "accept terminate $id from $who and remove it from queue"
+						else
+							log "accept terminate $id from $who and remove its response"
+						fi
 					else
 						echo "$who << reject terminate $id"
-						log "reject terminate $id from $who since it is owned by ${own[$id]}"
+						log "reject terminate $id from $who since no such request"
 					fi
-				elif [[ -v cmd[$id] ]]; then
-					queue=($(erase_from queue $id))
-					unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id]
-					echo "$who << accept terminate $id"
-					log "accept terminate $id from $who and remove it from queue"
-				else
-					echo "$who << reject terminate $id"
-					log "reject terminate $id from $who since no such request"
-				fi
+				done
 
 			elif [ "$command" == "use" ]; then
 				local regex_use_protocol="^protocol (\S+)$"
