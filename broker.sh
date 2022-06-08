@@ -1,12 +1,18 @@
 #!/bin/bash
 
 broker_main() {
-	log "broker version 2022-06-08 (protocol 0)"
 	declare "$@" >/dev/null 2>&1
+	declare set_vars=("$@" broker capacity logfile)
+
 	declare broker=${broker:-broker}
 	declare capacity=${capacity-65536}
 	declare default_timeout=${default_timeout:-0}
 	declare default_workers=${default_workers}
+	declare logfile=${logfile}
+
+	log "broker version 2022-06-08 (protocol 0)"
+	list_args "${set_vars[@]}" | xargs_ log "option:"
+	list_envinfo | xargs_ log "platform"
 
 	declare -A own # [id]=requester
 	declare -A cmd # [id]=command
@@ -20,26 +26,16 @@ broker_main() {
 	declare -A notify # [type]=subscriber...
 	declare -a queue # id...
 
-	list_args broker capacity "$@" logfile | while IFS= read -r opt; do log "option: $opt"; done
-	list_envinfo | while IFS= read -r info; do log "platform $info"; done
-
-	trap 'log "${broker:-broker} has been interrupted"; exit 64' INT
-	trap 'log "${broker:-broker} has been terminated"; exit 64' TERM
-
-	local vars=() args=()
-	list_args "$@" broker capacity logfile >/dev/null
-	declare set_vars=(${vars[@]})
 	declare id_next
 	declare io_count
 	declare tcp_fd
 
-	while init_system_io "$@"; do
+	while init_system_io; do
 		broker_routine "$@"
 		local code=$?
 		(( $code < 16 )) && break
 	done
 
-	log "${broker:-broker} is terminated"
 	return $code
 }
 
@@ -837,9 +833,9 @@ init_system_io() {
 }
 
 list_args() {
-	args=()
-	vars=()
-	local var val arg
+	args=() vars=()
+	local var val arg show=${show:0:3}
+	show=${show:-arg}
 	for var in "$@"; do
 		var=${var%%=*}
 		[[ " ${vars[@]} " == *" $var "* ]] && continue
@@ -850,8 +846,8 @@ list_args() {
 		fi
 		args+=("$arg")
 		vars+=("$var")
+		echo "${!show}"
 	done
-	[[ ${args[@]} ]] && printf "%s\n" "${args[@]}"
 }
 
 list_omit() {
@@ -868,6 +864,14 @@ erase_from() {
 	local value=${2:?}
 	list=" ${!list} "
 	echo ${list/ $value / }
+}
+
+xargs_() {
+	local line
+	local perform="${@:-echo}"
+	[[ $perform == *"{}"* ]] || perform+=" {}"
+	perform=${perform//{\}/\$line}
+	while IFS= read -r line; do eval "$perform"; done
 }
 
 input() {
@@ -916,21 +920,22 @@ list_envinfo() (
 	echo "RAM: $(printf "%.1fG" $size)"
 )
 
-init_logging() {
-	declare "$@" >/dev/null 2>&1
-	declare -g session=${session:-$(basename -s .sh "$0")_$(date '+%Y%m%d_%H%M%S')}
-	declare -g logfile=${logfile:-$(mktemp --suffix .log ${session}_XXXX)}
-	exec 3>> $logfile
-	if flock -xn 3; then
+log() {
+	local name=$(basename "${0%.sh}")
+	logfile=${logfile:-${name}_$(date '+%Y%m%d_%H%M%S_%3N').log}
+	if exec 3>> "$logfile" && flock -xn 3; then
 		trap 'code=$?; flock -u 3; exit $code' EXIT
 		exec 2> >(trap '' INT TERM; exec tee /dev/fd/2 >&3)
 	fi
-}
+	trap 'log "${'$name:-$name'} has been interrupted"; exit 64' INT
+	trap 'log "${'$name:-$name'} has been terminated"; exit 64' TERM
+	trap 'code=$?; cleanup 2>&-; log "${'$name:-$name'} is terminated"; exit $code' EXIT
 
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
+	log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
+	log "$@"
+}
 
 #### script main routine ####
 if [ "$0" == "$BASH_SOURCE" ]; then
-	init_logging "$@"
 	broker_main "$@"
 fi
