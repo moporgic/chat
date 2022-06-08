@@ -251,7 +251,7 @@ worker_routine() {
 					fi
 				elif [[ "$info" == "failed chat"* ]]; then
 					echo "who"
-					log "failed chat, check online clients..."
+					log "failed chat, check online names..."
 				fi
 			fi
 
@@ -362,8 +362,8 @@ worker_routine() {
 				if [ "$var" == "broker" ]; then
 					change_broker "$val_old" "${broker//:/ }"
 				elif [ "$var" == "worker" ]; then
-					log "worker who has been changed, register $worker on the chat system..."
-					echo "who ${worker:=worker-1}"
+					log "worker name has been changed, register $worker on the chat system..."
+					echo "name ${worker:=worker-1}"
 				elif [ "$var" == "state" ]; then
 					notify_state
 				fi
