@@ -30,7 +30,7 @@ broker_main() {
 	declare io_count
 	declare tcp_fd
 
-	while init_system_io; do
+	while init_system_io "$@"; do
 		broker_routine "$@"
 		local code=$?
 		(( $code < 16 )) && break

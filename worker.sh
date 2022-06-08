@@ -24,7 +24,7 @@ worker_main() {
 	declare tcp_fd
 	declare res_fd
 
-	while init_system_io && init_system_fd; do
+	while init_system_io "$@" && init_system_fd "$@"; do
 		worker_routine "$@"
 		local code=$?
 		(( $code < 16 )) && break
