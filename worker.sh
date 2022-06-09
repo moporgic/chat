@@ -551,12 +551,13 @@ init_system_io() {
 		local port=${BASH_REMATCH[2]}
 		while (( $((io_count++)) < ${max_io_count:-65536} )); do
 			log "connect to chat system at $addr:$port..."
-			sleep $((io_count ? 60 : 0))
 			if { exec {tcp_fd}<>/dev/tcp/$addr/$port; } 2>/dev/null; then
 				log "connected to chat system successfully"
 				exec 0<&$tcp_fd 1>&$tcp_fd {tcp_fd}>&- && return 0
 			fi
 			log "failed to connect $addr:$port, host down?"
+			log "wait ${wait_for_conn:-60}s before the next attempt..."
+			sleep ${wait_for_conn:-60}
 		done
 	elif (( $((io_count++)) < ${max_io_count:-1} )); then
 		return 0
