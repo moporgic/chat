@@ -795,16 +795,14 @@ init_system_io() {
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
 		local addr=${BASH_REMATCH[1]}
 		local port=${BASH_REMATCH[2]}
-		local wait_for_conn=0
 		while (( $((io_count++)) < ${max_io_count:-65536} )); do
 			log "connect to chat system at $addr:$port..."
-			sleep ${wait_for_conn:-0}
+			sleep $((io_count ? 60 : 0))
 			if { exec {tcp_fd}<>/dev/tcp/$addr/$port; } 2>/dev/null; then
 				log "connected to chat system successfully"
 				exec 0<&$tcp_fd 1>&$tcp_fd {tcp_fd}>&- && return 0
 			fi
 			log "failed to connect $addr:$port, host down?"
-			wait_for_conn=60
 		done
 	elif (( $((io_count++)) < ${max_io_count:-1} )); then
 		return 0
