@@ -351,8 +351,8 @@ broker_routine() {
 					workers=($(for worker in ${workers[@]}; do [[ -v state[$worker] ]] && echo $worker; done))
 					echo "$who << workers = (${workers[@]})"
 					for worker in ${workers[@]}; do
-						local num_assign=$(<<<" ${assign[@]} " grep -o " $worker " | wc -l)
-						echo "$who << # $worker ${state[$worker]} $num_assign assigned"
+						local assigned=($(filter_keys assign $worker))
+						echo "$who << # $worker ${state[$worker]} ${#assigned[@]} assigned"
 					done
 					log "accept query workers from $who, workers = ($(omit ${workers[@]}))"
 
