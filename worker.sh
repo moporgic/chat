@@ -117,7 +117,8 @@ worker_routine() {
 			elif [ "$what" == "protocol" ]; then
 				if [ "$confirm" == "accept" ]; then
 					log "handshake with $who successfully"
-					linked=($(erase_from linked $who) $who)
+					erase_from linked $who
+					linked+=($who)
 					observe_state; notify_state $who
 
 				elif [ "$confirm" == "reject" ]; then
@@ -164,11 +165,11 @@ worker_routine() {
 
 				if [[ $info =~ $regex_logout ]]; then
 					local who=${BASH_REMATCH[1]}
-					if [[ " ${linked[@]} " == *" $who "* ]]; then
+					if contains linked $who; then
 						log "$who disconnected, wait until $who come back..."
-						linked=($(erase_from linked $who))
+						erase_from linked $who
 
-					elif [[ " ${own[@]} " == *" $who "* ]] && ! [ "${keep_unowned_tasks}" ]; then
+					elif contains own $who && ! [ "${keep_unowned_tasks}" ]; then
 						log "$who logged out"
 						discard_owned_assets $(filter_keys own $who)
 					fi
@@ -177,18 +178,18 @@ worker_routine() {
 					local who=${BASH_REMATCH[1]}
 					local new=${BASH_REMATCH[2]}
 
-					if [[ " ${own[@]} " == *" $who "* ]]; then
+					if contains own $who; then
 						log "$who renamed as $new, transfer ownerships..."
 						local id
 						for id in $(filter_keys own $who); do own[$id]=$new; done
 					fi
-					if [[ " ${linked[@]} " == *" $who "* ]]; then
-						broker=($(erase_from broker $who))
-						linked=($(erase_from linked $who))
+					if contains linked $who; then
+						erase_from broker $who
+						erase_from linked $who
 						log "$who renamed as $new, make handshake (protocol 0) with $new again..."
 						echo "$new << use protocol 0"
 					fi
-					if [[ " ${broker[@]} " == *" $new "* ]]; then
+					if contains broker $new; then
 						log "$new connected, make handshake (protocol 0) with $new..."
 						echo "$new << use protocol 0"
 					fi
@@ -221,23 +222,23 @@ worker_routine() {
 					log "name $worker has been occupied, query online names..."
 					echo "who"
 				elif [[ "$info" == "who: "* ]]; then
+					local online=(${info:5})
 					if [ "$state" == "init" ]; then
-						while [[ " ${info:5} " == *" $worker "* ]]; do
+						while contains online $worker; do
 							worker=${worker%-*}-$((${worker##*-}+1))
 						done
 						log "register worker on the chat system..."
 						echo "name ${worker:=worker-1}"
 					else
 						for who in ${broker[@]}; do
-							[[ " ${info:5} " == *" $who "* ]] && continue
+							contains online $who && continue
 							log "$who disconnected, wait until $who come back..."
-							linked=($(erase_from linked $who))
+							erase_from linked $who
 						done
 						if ! [ "${keep_unowned_tasks}" ] && (( ${#own[@]} )); then
 							local who
 							for who in $(printf "%s\n" "${own[@]}" | sort | uniq); do
-								[[ " ${info:5} " == *" $who "* ]] && continue
-								[[ " ${broker[@]} " == *" $who "* ]] && continue
+								contains online $who || contains broker $who && continue
 								discard_owned_assets $(filter_keys own $who)
 							done
 						fi
@@ -347,7 +348,7 @@ worker_routine() {
 				local val=${options:${#var}+1}
 				local show_val="$var[@]"
 				local val_old="${!show_val}"
-				eval $var="$val"
+				eval $var="\"$val\""
 				echo "$who << accept set ${var}${val:+=${val}}"
 				log "accept set ${var}${val:+=\"${val}\"} from $who"
 				set_vars+=($var)
@@ -486,8 +487,8 @@ change_broker() {
 	local current=($1) pending=($2)
 	local added=(${pending[@]}) removed=(${current[@]})
 	local who
-	for who in ${current[@]}; do added=($(erase_from added $who)); done
-	for who in ${pending[@]}; do removed=($(erase_from removed $who)); done
+	for who in ${current[@]}; do erase_from added $who; done
+	for who in ${pending[@]}; do erase_from removed $who; done
 	log "confirm broker change: (${current[@]}) --> (${pending[@]})"
 	if [[ ${removed[@]} ]] && ! [ "${keep_unowned_tasks}" ]; then
 		log "broker has been changed, discard assignments of ${removed[@]}..."
@@ -500,7 +501,7 @@ change_broker() {
 		printf "%s << use protocol 0\n" "${added[@]}"
 	fi
 	for who in ${added[@]} ${removed[@]}; do
-		linked=($(erase_from linked $who))
+		erase_from linked $who
 	done
 	broker=(${pending[@]})
 }
@@ -611,11 +612,16 @@ filter_keys() {
 	done
 }
 
+contains() {
+	local list=${1:-_}[@]
+	local value=${2}
+	[[ " ${!list} " == *" $value "* ]]
+}
+
 erase_from() {
-	local list=${1:?}[@]
-	local value=${2:?}
+	local list=${1:-_}[@]
 	list=" ${!list} "
-	echo ${list/ $value / }
+	eval "${1:-_}=(${list/ ${2} / })"
 }
 
 xargs_() {

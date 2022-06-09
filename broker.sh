@@ -241,14 +241,14 @@ broker_routine() {
 								echo "${assign[$id]} << terminate $id"
 								log "terminate assigned request $id on ${assign[$id]}"
 							else
-								queue=($(erase_from queue $id))
+								erase_from queue $id
 							fi
 						done
 					fi
 					local item
 					for item in $(vfmt=" %s " filter_keys notify "* $who *"); do
 						local subscribers=(${notify[$item]})
-						subscribers=($(erase_from subscribers $who))
+						erase_from subscribers $who
 						notify[$item]=${subscribers[@]}
 						unset news[$item-$who]
 						log "unsubscribe $item for $who"
@@ -278,7 +278,8 @@ broker_routine() {
 						for item in $(vfmt=" %s " filter_keys notify "* $who *"); do
 							log "transfer the $item subscription to $new"
 							local subscribers=(${notify[$item]})
-							subscribers=($(erase_from subscribers $who) $new)
+							erase_from subscribers $who
+							subscribers+=($new)
 							notify[$item]=${subscribers[@]}
 							news[$item-$new]=${news[$item-$who]}
 							unset news[$item-$who]
@@ -433,7 +434,7 @@ broker_routine() {
 								echo "${assign[$id]} << terminate $id"
 								log "accept terminate $id from $who and forward it to ${assign[$id]}"
 							else
-								queue=($(erase_from queue $id))
+								erase_from queue $id
 								unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id]
 								echo "$who << accept terminate $id"
 								log "accept terminate $id from $who and remove it from queue"
@@ -467,7 +468,8 @@ broker_routine() {
 				if [[ $options =~ ^(state|status|idle|busy|assign|capacity)$ ]]; then
 					local item=$options
 					local subscribers=(${notify[$item]})
-					subscribers=($(erase_from subscribers $who) $who)
+					erase_from subscribers $who
+					subscribers+=($who)
 					notify[$item]=${subscribers[@]}
 					news[$item-$who]=subscribe
 					echo "$who << accept $command $options"
@@ -493,7 +495,7 @@ broker_routine() {
 				if [[ $options =~ ^(state|status|idle|busy|assign|capacity)$ ]]; then
 					local item=$options
 					local subscribers=(${notify[$item]})
-					subscribers=($(erase_from subscribers $who))
+					erase_from subscribers $who
 					notify[$item]=${subscribers[@]}
 					unset news[$item-$who]
 					echo "$who << accept $command $options"
@@ -508,7 +510,7 @@ broker_routine() {
 				local val=${options:${#var}+1}
 				local show_val="$var[@]"
 				local val_old="${!show_val}"
-				eval $var="$val"
+				eval $var="\"$val\""
 				echo "$who << accept set ${var}${val:+=${val}}"
 				log "accept set ${var}${val:+=\"${val}\"} from $who"
 				set_vars+=($var)
@@ -616,7 +618,7 @@ broker_routine() {
 						echo "${assign[$id]} << terminate $id"
 						log "terminate assigned request $id on ${assign[$id]}"
 					elif [[ -v own[$id] ]]; then
-						queue=($(erase_from queue $id))
+						erase_from queue $id
 					fi
 					unset assign[$id] tmdue[$id]
 					local code="timeout"
@@ -631,7 +633,7 @@ broker_routine() {
 		fi
 
 		if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
-			assign_queued_requests
+			assign_requests
 		fi
 
 		refresh_observations
@@ -641,7 +643,7 @@ broker_routine() {
 	return 16
 }
 
-assign_queued_requests() {
+assign_requests() {
 	declare -A workers_for cost_for
 	local id worker stat pref workers max_cost
 
@@ -669,7 +671,7 @@ assign_queued_requests() {
 			log "assign request $id to $worker"
 			state[$worker]="hold":${state[$worker]:5}
 			assign[$id]=$worker
-			queue=($(erase_from queue $id))
+			erase_from queue $id
 			id=; break
 		done
 
@@ -856,11 +858,16 @@ filter_keys() {
 	done
 }
 
+contains() {
+	local list=${1:-_}[@]
+	local value=${2}
+	[[ " ${!list} " == *" $value "* ]]
+}
+
 erase_from() {
-	local list=${1:?}[@]
-	local value=${2:?}
+	local list=${1:-_}[@]
 	list=" ${!list} "
-	echo ${list/ $value / }
+	eval "${1:-_}=(${list/ ${2} / })"
 }
 
 xargs_() {
