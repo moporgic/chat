@@ -11,8 +11,8 @@ worker_main() {
 	declare logfile=${logfile}
 
 	log "worker version 2022-06-08 (protocol 0)"
-	list_args "${set_vars[@]}" | xargs_ log "option:"
-	list_envinfo | xargs_ log "platform"
+	args_of "${set_vars[@]}" | xargs_ log "option:"
+	envinfo | xargs_ log "platform"
 
 	declare -A own # [id]=requester
 	declare -A cmd # [id]=command
@@ -170,10 +170,7 @@ worker_routine() {
 
 					elif [[ " ${own[@]} " == *" $who "* ]] && ! [ "${keep_unowned_tasks}" ]; then
 						log "$who logged out"
-						local id
-						for id in ${!own[@]}; do
-							[ "${own[$id]}" == "$who" ] && discard_owned_asset $id
-						done
+						discard_owned_assets $(filter_keys own $who)
 					fi
 
 				elif [[ $info =~ $regex_rename ]]; then
@@ -183,9 +180,7 @@ worker_routine() {
 					if [[ " ${own[@]} " == *" $who "* ]]; then
 						log "$who renamed as $new, transfer ownerships..."
 						local id
-						for id in ${!own[@]}; do
-							[ "${own[$id]}" == "$who" ] && own[$id]=$new
-						done
+						for id in $(filter_keys own $who); do own[$id]=$new; done
 					fi
 					if [[ " ${linked[@]} " == *" $who "* ]]; then
 						broker=($(erase_from broker $who))
@@ -239,13 +234,11 @@ worker_routine() {
 							linked=($(erase_from linked $who))
 						done
 						if ! [ "${keep_unowned_tasks}" ] && (( ${#own[@]} )); then
-							local who id
+							local who
 							for who in $(printf "%s\n" "${own[@]}" | sort | uniq); do
 								[[ " ${info:5} " == *" $who "* ]] && continue
 								[[ " ${broker[@]} " == *" $who "* ]] && continue
-								for id in ${!own[@]}; do
-									[ "${own[$id]}" == "$who" ] && discard_owned_asset $id
-								done
+								discard_owned_assets $(filter_keys own $who)
 							done
 						fi
 					fi
@@ -271,7 +264,7 @@ worker_routine() {
 					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
 					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$who" ] && [[ -v res[$id] ]] && echo $id; done))
-					log "accept report responses from $who, responses = ($(list_omit ${ids[@]}))"
+					log "accept report responses from $who, responses = ($(omit ${ids[@]}))"
 					for id in ${ids[@]}; do
 						echo "$who << response $id ${res[$id]%%:*} {${res[$id]#*:}}"
 					done
@@ -308,7 +301,7 @@ worker_routine() {
 							echo "$who << # $id {${cmd[$id]}} [${own[$id]}]"
 						fi
 					done
-					log "accept query jobs from $who, jobs = ($(list_omit ${ids[@]}))"
+					log "accept query jobs from $who, jobs = ($(omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(request|assign)s?(.*)$ ]] ; then
 					local ids=() id
@@ -318,7 +311,7 @@ worker_routine() {
 					for id in ${ids[@]}; do
 						echo "$who << # request $id {${cmd[$id]}}"
 					done
-					log "accept query requests from $who, requests = ($(list_omit ${ids[@]}))"
+					log "accept query requests from $who, requests = ($(omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
 					local ids=() id
@@ -328,20 +321,20 @@ worker_routine() {
 					for id in ${ids[@]}; do
 						echo "$who << # response $id ${res[$id]%%:*} {${res[$id]#*:}}"
 					done
-					log "accept query responses from $who, responses = ($(list_omit ${ids[@]}))"
+					log "accept query responses from $who, responses = ($(omit ${ids[@]}))"
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
 					local vars=() args=()
-					list_args ${BASH_REMATCH[2]:-${set_vars[@]}} >/dev/null
+					args_of ${BASH_REMATCH[2]:-${set_vars[@]}} >/dev/null
 					echo "$who << options = (${vars[@]})"
 					[[ ${args[@]} ]] && printf "$who << # %s\n" "${args[@]}"
-					log "accept query options from $who, options = ($(list_omit ${vars[@]}))"
+					log "accept query options from $who, options = ($(omit ${vars[@]}))"
 
 				elif [ "$options" == "envinfo" ]; then
 					echo "$who << accept query envinfo"
 					log "accept query envinfo from $who"
 					{
-						local envinfo=$(list_envinfo)
+						local envinfo=$(envinfo)
 						echo "$who << result envinfo ($(<<<$envinfo wc -l))"
 						<<< $envinfo xargs -r -d'\n' -L1 echo "$who << #"
 					} &
@@ -399,7 +392,7 @@ worker_routine() {
 					log "accept operate restart from $who"
 					log "$worker is restarting..."
 					local vars=() args=()
-					list_args ${set_vars[@]} >/dev/null
+					args_of ${set_vars[@]} >/dev/null
 					[[ $tcp_fd ]] && exec 0<&- 1>&-
 					exec $0 "${args[@]}"
 
@@ -475,35 +468,40 @@ init_system_fd() {
 	return 16
 }
 
-discard_owned_asset() {
-	local id=${1:?id}
-	if [[ -v res[$id] ]]; then
-		log "discard request $id and response $id"
-	elif [[ -v pid[$id] ]]; then
-		log "discard and terminate request $id"
-		local cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
-		[[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null
-	fi
-	unset own[$id] cmd[$id] res[$id] pid[$id]
+discard_owned_assets() {
+	local id
+	for id in $@; do
+		if [[ -v res[$id] ]]; then
+			log "discard request $id and response $id"
+		elif [[ -v pid[$id] ]]; then
+			log "discard and terminate request $id"
+			local cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
+			[[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null
+		fi
+		unset own[$id] cmd[$id] res[$id] pid[$id]
+	done
 }
 
 change_broker() {
 	local current=($1) pending=($2)
 	local added=(${pending[@]}) removed=(${current[@]})
-	local who id
+	local who
 	for who in ${current[@]}; do added=($(erase_from added $who)); done
 	for who in ${pending[@]}; do removed=($(erase_from removed $who)); done
 	log "confirm broker change: (${current[@]}) --> (${pending[@]})"
-	for id in ${!own[@]}; do
-		[[ " ${removed[@]} " == *" ${own[$id]} "* ]] && discard_owned_asset $id
-	done
-	for who in ${added[@]} ${removed[@]}; do
-		linked=($(erase_from linked $who))
-	done
+	if [[ ${removed[@]} ]] && ! [ "${keep_unowned_tasks}" ]; then
+		log "broker has been changed, discard assignments of ${removed[@]}..."
+		for who in ${removed[@]}; do
+			discard_owned_assets $(filter_keys own $who)
+		done
+	fi
 	if [[ ${added[@]} ]]; then
 		log "broker has been changed, make handshake (protocol 0) with ${added[@]}..."
 		printf "%s << use protocol 0\n" "${added[@]}"
 	fi
+	for who in ${added[@]} ${removed[@]}; do
+		linked=($(erase_from linked $who))
+	done
 	broker=(${pending[@]})
 }
 
@@ -568,7 +566,7 @@ init_system_io() {
 	return 16
 }
 
-list_args() {
+args_of() {
 	args=() vars=()
 	local var val arg show=${show:0:3}
 	show=${show:-arg}
@@ -586,13 +584,31 @@ list_args() {
 	done
 }
 
-list_omit() {
+omit() {
 	if (( "$#" <= ${max_printable_list_size:-10} )); then
 		echo "$@"
 	else
 		local num_show=${num_print_when_omitted:-6}
 		echo "${@:1:$((num_show/2))}" "...[$(($#-num_show))]..." "${@:$#-$((num_show/2-1))}"
 	fi
+}
+
+filter() {
+	local item
+	for item in "${@:2}"; do [[ $item == $1 ]] && echo "$item"; done
+}
+
+filter_keys() {
+	local map="$1"
+	local key_match="*" val_match="$2"
+	[ "$3" ] && local key_match="$2" val_match="$3"
+	eval local keys=('${!'$map'[@]}')
+	for key in ${keys[@]}; do
+		[[ $key == $key_match ]] || continue
+		local show=$map[$key]
+		local val=$(printf "${vfmt:-%s}" "${!show}")
+		[[ $val == $val_match ]] && echo $key
+	done
 }
 
 erase_from() {
@@ -621,7 +637,7 @@ input() {
 	fi
 }
 
-list_envinfo() (
+envinfo() (
 	exec 2>/dev/null
 	# host name
 	echo "Host: $(hostname)"
