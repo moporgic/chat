@@ -313,7 +313,7 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0"
+					echo "$who << protocol 0 broker"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then

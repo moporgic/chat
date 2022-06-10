@@ -275,7 +275,11 @@ worker_routine() {
 				fi
 
 			elif [ "$command" == "query" ]; then
-				if [ "$options" == "state" ]; then
+				if [ "$options" == "protocol" ]; then
+					echo "$who << protocol 0 worker"
+					log "accept query protocol from $who"
+
+				elif [ "$options" == "state" ]; then
 					echo "$who << state = ${state[@]}"
 					log "accept query state from $who, state = ${state[@]}"
 
