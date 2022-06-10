@@ -864,9 +864,11 @@ contains() {
 }
 
 erase_from() {
-	local list=${1:-_}[@]
-	list=" ${!list} "
-	eval "${1:-_}=(${list/ ${2} / })"
+	local list=${1:-_}
+	local show=${list}[@]
+	local show=" ${!show} " item
+	for item in "${@:2}"; do show=${show/ $item / }; done
+	eval "$list=($show)"
 }
 
 xargs_eval() {

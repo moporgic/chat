@@ -486,12 +486,12 @@ discard_owned_assets() {
 change_broker() {
 	local current=($1) pending=($2)
 	local added=(${pending[@]}) removed=(${current[@]})
-	local who
-	for who in ${current[@]}; do erase_from added $who; done
-	for who in ${pending[@]}; do erase_from removed $who; done
+	erase_from added ${current[@]}
+	erase_from removed ${pending[@]}
 	log "confirm broker change: (${current[@]}) --> (${pending[@]})"
 	if [[ ${removed[@]} ]] && ! [ "${keep_unowned_tasks}" ]; then
 		log "broker has been changed, discard assignments of ${removed[@]}..."
+		local who
 		for who in ${removed[@]}; do
 			discard_owned_assets $(filter_keys own $who)
 		done
@@ -500,9 +500,7 @@ change_broker() {
 		log "broker has been changed, make handshake (protocol 0) with ${added[@]}..."
 		printf "%s << use protocol 0\n" "${added[@]}"
 	fi
-	for who in ${added[@]} ${removed[@]}; do
-		erase_from linked $who
-	done
+	erase_from linked ${added[@]} ${removed[@]}
 	broker=(${pending[@]})
 }
 
@@ -618,9 +616,11 @@ contains() {
 }
 
 erase_from() {
-	local list=${1:-_}[@]
-	list=" ${!list} "
-	eval "${1:-_}=(${list/ ${2} / })"
+	local list=${1:-_}
+	local show=${list}[@]
+	local show=" ${!show} " item
+	for item in "${@:2}"; do show=${show/ $item / }; done
+	eval "$list=($show)"
 }
 
 xargs_eval() {
