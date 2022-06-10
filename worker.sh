@@ -10,9 +10,9 @@ worker_main() {
 	declare capacity=${capacity-$(nproc)}
 	declare logfile=${logfile}
 
-	log "worker version 2022-06-08 (protocol 0)"
-	args_of "${set_vars[@]}" | xargs_ log "option:"
-	envinfo | xargs_ log "platform"
+	log "worker version 2022-06-10 (protocol 0)"
+	args_of "${set_vars[@]}" | xargs_eval log "option:"
+	envinfo | xargs_eval log "platform"
 
 	declare -A own # [id]=requester
 	declare -A cmd # [id]=command
@@ -623,12 +623,18 @@ erase_from() {
 	eval "${1:-_}=(${list/ ${2} / })"
 }
 
-xargs_() {
-	local line
-	local perform="${@:-echo}"
-	[[ $perform == *"{}"* ]] || perform+=" {}"
-	perform=${perform//{\}/\$line}
-	while IFS= read -r line; do eval "$perform"; done
+xargs_eval() {
+	local item
+	local read="read -r"
+	case "$1" in
+	-d)  read+=" -d\"${2}\""; shift 2; ;;
+	-d*) read+=" -d\"${1:2}\""; shift; ;;
+	esac
+	local exec="${@:-echo}"
+	[[ $exec == *"{}"* ]] || exec+=" {}"
+	exec=${exec//{\}/\$item}
+	while eval $read item; do eval "$exec"; done
+	[[ $item ]] && eval "$exec"
 }
 
 input() {

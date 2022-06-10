@@ -10,9 +10,9 @@ broker_main() {
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
 
-	log "broker version 2022-06-08 (protocol 0)"
-	args_of "${set_vars[@]}" | xargs_ log "option:"
-	envinfo | xargs_ log "platform"
+	log "broker version 2022-06-10 (protocol 0)"
+	args_of "${set_vars[@]}" | xargs_eval log "option:"
+	envinfo | xargs_eval log "platform"
 
 	declare -A own # [id]=requester
 	declare -A cmd # [id]=command
@@ -543,7 +543,7 @@ broker_routine() {
 				if [[ "$options" =~ $regex_operate_power ]]; then
 					local type=${BASH_REMATCH[1]}
 					local patt=${BASH_REMATCH[2]:-$broker}
-					local matches=($(<<<$patt grep -Eo '\S+' | xargs_ "filter \"{}\" ${!state[@]} $broker"))
+					local matches=($(<<<$patt grep -Eo '\S+' | xargs_eval "filter \"{}\" ${!state[@]} $broker"))
 
 					local match
 					for match in ${matches[@]}; do
@@ -579,7 +579,7 @@ broker_routine() {
 					elif [ "$type" == "discard" ]; then
 						log "accept operate $type $patt from $who"
 						local worker
-						for worker in $(<<<$patt grep -Eo '\S+' | xargs_ "filter \"{}\" ${!state[@]}"); do
+						for worker in $(<<<$patt grep -Eo '\S+' | xargs_eval "filter \"{}\" ${!state[@]}"); do
 							printf "$who << confirm $type %s\n" $worker
 							discard_workers $worker
 						done
@@ -869,12 +869,18 @@ erase_from() {
 	eval "${1:-_}=(${list/ ${2} / })"
 }
 
-xargs_() {
-	local line
-	local perform="${@:-echo}"
-	[[ $perform == *"{}"* ]] || perform+=" {}"
-	perform=${perform//{\}/\$line}
-	while IFS= read -r line; do eval "$perform"; done
+xargs_eval() {
+	local item
+	local read="read -r"
+	case "$1" in
+	-d)  read+=" -d\"${2}\""; shift 2; ;;
+	-d*) read+=" -d\"${1:2}\""; shift; ;;
+	esac
+	local exec="${@:-echo}"
+	[[ $exec == *"{}"* ]] || exec+=" {}"
+	exec=${exec//{\}/\$item}
+	while eval $read item; do eval "$exec"; done
+	[[ $item ]] && eval "$exec"
 }
 
 input() {
