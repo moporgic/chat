@@ -348,7 +348,7 @@ broker_routine() {
 				elif [[ "$options" =~ ^(worker)s?(.*)$ ]]; then
 					local workers=() worker
 					workers=(${BASH_REMATCH[2]:-$(<<< ${!state[@]} xargs -r printf "%s\n" | sort)})
-					workers=($(for worker in ${workers[@]}; do [[ -v state[$worker] ]] && echo $worker; done))
+					retain_from workers ${!state[@]}
 					echo "$who << workers = (${workers[@]})"
 					for worker in ${workers[@]}; do
 						local assigned=($(filter_keys assign $worker))
@@ -359,7 +359,7 @@ broker_routine() {
 				elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
-					ids=($(for id in ${ids[@]}; do [[ -v cmd[$id] ]] && echo $id; done))
+					retain_from ids ${!cmd[@]}
 					echo "$who << jobs = (${ids[@]})"
 					for id in ${ids[@]}; do
 						if [[ -v res[$id] ]]; then
@@ -377,7 +377,8 @@ broker_routine() {
 				elif [[ "$options" =~ ^(request)s?(.*)$ ]] ; then
 					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
-					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$who" ] && ! [[ -v res[$id] ]] && echo $id; done))
+					retain_from ids $(filter_keys own $who)
+					erase_from ids ${!res[@]}
 					echo "$who << requests = (${ids[@]})"
 					for id in ${ids[@]}; do
 						if [[ -v assign[$id] ]]; then
@@ -393,7 +394,8 @@ broker_routine() {
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
 					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
-					ids=($(for id in ${ids[@]}; do [ "${own[$id]}" == "$who" ] && [[ -v res[$id] ]] && echo $id; done))
+					retain_from ids $(filter_keys own $who)
+					retain_from ids ${!res[@]}
 					echo "$who << responses = (${ids[@]})"
 					for id in ${ids[@]}; do
 						echo "$who << # response $id ${res[$id]%%:*} {${res[$id]#*:}}"
@@ -424,7 +426,7 @@ broker_routine() {
 					local ids=($options)
 				else
 					local ids=($(filter_keys own "$options" "$who" | sort))
-					local ids=($(for id in ${ids[@]}; do [[ -v res[$id] ]] || echo $id; done))
+					retain_from ids ${!res[@]}
 				fi
 				local id
 				for id in ${ids[@]}; do
@@ -869,6 +871,13 @@ erase_from() {
 	local show=" ${!show} " item
 	for item in "${@:2}"; do show=${show/ $item / }; done
 	eval "$list=($show)"
+}
+
+retain_from() {
+	local list=${1:-_}
+	local show=() item
+	for item in "${@:2}"; do contains $list $item && show+=($item); done
+	eval "$list=(${show[@]})"
 }
 
 xargs_eval() {
