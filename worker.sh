@@ -549,6 +549,72 @@ refresh_state() {
 	[ "$state" != "init" ] && observe_state && notify_state
 }
 
+app() {
+	local app=$1
+	[[ $app ]] || return 127
+	local app_home="${app_home:-.cache/worker}/$app"
+	pushd "$app_home" >&- 2>&-
+	if [ $? != 0 ]; then # get app package from repo...
+		local app_repo=$(realpath -q "${app_repo:-.}" || echo "${app_repo}")
+		mkdir -p "$app_home"
+		pushd "$app_home" >&- 2>&- || return 128
+		local fmt
+		for fmt in ".tar.xz" ".tar.gz" ".zip" ""; do
+			pkg-get "${app_repo}/${app}${fmt}" && break
+		done 2>&-
+		if [ $? != 0 ]; then # app package not found
+			popd >&- 2>&-
+			rm -r "$app_home"
+			return -1
+		elif [ -e setup.sh ]; then
+			bash setup.sh 2>&1 >setup.log
+		fi
+	fi
+	local code
+	eval "${@:2}"
+	code=$?
+	popd >&- 2>&-
+	return $code
+}
+
+pkg-get() {
+	local pkg=$1
+	[[ $pkg ]] || return 127
+	pkg=$(realpath -q "$pkg" || echo "$pkg")
+	local tmp=$(mktemp -d -p .)
+	pushd $tmp >/dev/null || return 128
+	local code=0
+	if [[ $pkg != http* ]]; then
+		rsync -aq "$pkg" .
+	else
+		curl -OJRfs "$pkg"
+	fi
+	code=$(($?|code))
+	popd >/dev/null
+	if [ $code == 0 ]; then
+		unpack $tmp/*
+		code=$(($?|code))
+	fi
+	rm -r $tmp
+	return $code
+}
+
+unpack() {
+	local code=0 pkg
+	for pkg in "$@"; do
+		case "${pkg,,}" in
+		*.tar.xz|*.txz)	tar Jxf "$pkg"; ;;
+		*.tar.gz|*.tgz)	tar zxf "$pkg"; ;;
+		*.tar)	tar xf "$pkg"; ;;
+		*.xz)	xz -kd "$pkg"; ;;
+		*.gz)	gzip -kd "$pkg"; ;;
+		*.zip)	unzip -q -o "$pkg"; ;;
+		*.7z)	7za x -y "$pkg" >&-; ;;
+		esac; code=$(($?|code))
+	done
+	return $code
+}
+
 init_system_io() {
 	io_count=${io_count:-0}
 	if [[ $1 =~ ^([^:=]+):([0-9]+)$ ]]; then
