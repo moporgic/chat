@@ -6,7 +6,7 @@ worker_main() {
 
 	declare broker=${broker-broker}
 	declare broker=(${broker//:/ })
-	declare worker=${worker:-worker-1}
+	declare worker=${worker-worker-1}
 	declare capacity=${capacity-$(nproc)}
 	declare logfile=${logfile}
 
@@ -207,28 +207,24 @@ worker_routine() {
 				if [[ "$info" == "protocol"* ]]; then
 					log "chat system protocol verified successfully"
 					log "register worker on the chat system..."
-					echo "name ${worker:=worker-1}"
-				elif [[ "$info" == "failed protocol"* ]]; then
-					log "unsupported protocol; shutdown"
-					return 1
+					echo "name $worker"
 				elif [[ "$info" == "name"* ]]; then
-					log "registered as $worker successfully"
+					log "registered as ${worker:=${info:6}} successfully"
 					observe_state
 					if [[ ${broker[@]} ]]; then
 						log "make handshake (protocol 0) with ${broker[@]}..."
 						printf "%s << use protocol 0\n" "${broker[@]}"
 					fi
-				elif [[ "$info" == "failed name"* ]]; then
-					log "name $worker has been occupied, query online names..."
-					echo "who"
 				elif [[ "$info" == "who: "* ]]; then
 					local online=(${info:5})
 					if [[ ! $state ]]; then
-						while contains online $worker; do
-							worker=${worker%-*}-$((${worker##*-}+1))
-						done
+						if [[ $worker ]]; then
+							while contains online $worker; do
+								worker=${worker%-*}-$((${worker##*-}+1))
+							done
+						fi
 						log "register worker on the chat system..."
-						echo "name ${worker:=worker-1}"
+						echo "name $worker"
 					else
 						for who in ${broker[@]}; do
 							contains online $who && continue
@@ -243,9 +239,15 @@ worker_routine() {
 							done
 						fi
 					fi
-				elif [[ "$info" == "failed chat"* ]]; then
+				elif [[ "$info" == "failed name"* ]]; then
+					log "name $worker has been occupied, query online names..."
 					echo "who"
+				elif [[ "$info" == "failed chat"* ]]; then
 					log "failed chat, check online names..."
+					echo "who"
+				elif [[ "$info" == "failed protocol"* ]]; then
+					log "unsupported protocol; shutdown"
+					return 1
 				fi
 			fi
 
@@ -276,7 +278,7 @@ worker_routine() {
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 worker"
+					echo "$who << protocol 0 worker 2022-06-17"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
@@ -363,8 +365,8 @@ worker_routine() {
 				if [ "$var" == "broker" ]; then
 					change_broker "$val_old" "${broker//:/ }"
 				elif [ "$var" == "worker" ]; then
-					log "worker name has been changed, register $worker on the chat system..."
-					echo "name ${worker:=worker-1}"
+					log "worker name has been changed, register worker on the chat system..."
+					echo "name $worker"
 				elif [ "$var" == "state" ]; then
 					notify_state
 				fi
@@ -398,7 +400,7 @@ worker_routine() {
 				elif [ "$options" == "restart" ]; then
 					echo "$who << confirm restart"
 					log "accept operate restart from $who"
-					log "$worker is restarting..."
+					log "${worker:-worker} is restarting..."
 					local vars=() args=()
 					args_of ${set_vars[@]} >/dev/null
 					[[ $tcp_fd ]] && exec 0<&- 1>&-

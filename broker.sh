@@ -4,13 +4,13 @@ broker_main() {
 	declare "$@" >/dev/null 2>&1
 	declare set_vars=("$@" broker capacity logfile)
 
-	declare broker=${broker:-broker}
+	declare broker=${broker-broker}
 	declare capacity=${capacity-65536}
 	declare default_timeout=${default_timeout:-0}
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
 
-	log "broker version 2022-06-10 (protocol 0)"
+	log "broker version 2022-06-17 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -299,16 +299,16 @@ broker_routine() {
 			elif [ "$type" == "%" ]; then
 				if [[ "$info" == "protocol"* ]]; then
 					log "chat system protocol verified successfully"
-					log "register $broker on the chat system..."
+					log "register broker on the chat system..."
 					echo "name $broker"
-				elif [[ "$info" == "failed protocol"* ]]; then
-					log "unsupported protocol; shutdown"
-					return 1
 				elif [[ "$info" == "name"* ]]; then
-					log "registered as $broker successfully"
+					log "registered as ${broker:=${info:6}} successfully"
 					if [ "$workers" ]; then
 						contact_workers ${workers[@]//:/ }
 					fi
+				elif [[ "$info" == "failed protocol"* ]]; then
+					log "unsupported protocol; shutdown"
+					return 1
 				elif [[ "$info" == "failed name"* ]]; then
 					log "another $broker is already running? shutdown"
 					return 2
@@ -322,7 +322,7 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker"
+					echo "$who << protocol 0 broker 2022-06-17"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
@@ -527,8 +527,8 @@ broker_routine() {
 				set_vars+=($var)
 
 				if [ "$var" == "broker" ]; then
-					log "broker who has been changed, register $broker on the chat system..."
-					echo "who $broker"
+					log "broker name has been changed, register broker on the chat system..."
+					echo "name $broker"
 				elif [ "$var" == "workers" ]; then
 					contact_workers ${workers[@]//:/ }
 				fi
@@ -570,7 +570,7 @@ broker_routine() {
 						if [ "$type" == "shutdown" ]; then
 							return 0
 						elif [ "$type" == "restart" ]; then
-							log "$broker is restarting..."
+							log "${broker:-broker} is restarting..."
 							local vars=() args=()
 							args_of ${set_vars[@]} >/dev/null
 							[[ $tcp_fd ]] && exec 0<&- 1>&-
