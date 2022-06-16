@@ -10,7 +10,7 @@ worker_main() {
 	declare capacity=${capacity-$(nproc)}
 	declare logfile=${logfile}
 
-	log "worker version 2022-06-10 (protocol 0)"
+	log "worker version 2022-06-17 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -34,7 +34,7 @@ worker_main() {
 }
 
 worker_routine() {
-	local state=("init") # (idle|busy #requests/capacity)
+	local state=() # (idle|busy #requests/capacity)
 	local linked=() # broker...
 
 	log "verify chat system protocol 0..."
@@ -78,7 +78,7 @@ worker_routine() {
 				fi
 			else
 				echo "$requester << reject request ${id:-{$command\}}"
-				log "reject request ${id:+$id }{$command} from $requester due to $state state, #cmd = ${#cmd[@]}"
+				log "reject request ${id:+$id }{$command} from $requester, state = ${state[@]:-init}"
 			fi
 
 		elif [[ $message =~ $regex_confirm_response ]]; then
@@ -223,7 +223,7 @@ worker_routine() {
 					echo "who"
 				elif [[ "$info" == "who: "* ]]; then
 					local online=(${info:5})
-					if [ "$state" == "init" ]; then
+					if [[ ! $state ]]; then
 						while contains online $worker; do
 							worker=${worker%-*}-$((${worker##*-}+1))
 						done
@@ -258,8 +258,8 @@ worker_routine() {
 				if [ "$options" == "state" ]; then
 					log "accept report state from $who"
 					notify_state $who
-				elif [ "$options" == "state with requests" ]; then
-					log "accept report state with requests from $who"
+				elif [ "$options" == "status" ]; then
+					log "accept report status from $who"
 					notify_state_with_requests $who
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
 					local ids=() id
@@ -280,20 +280,20 @@ worker_routine() {
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
-					echo "$who << state = ${state[@]}"
-					log "accept query state from $who, state = ${state[@]}"
+					echo "$who << state = ${state[@]:-init}"
+					log "accept query state from $who, state = ${state[@]:-init}"
 
 				elif [ "$options" == "linked" ]; then
 					echo "$who << linked = ${linked[@]}"
 					log "accept query linked from $who, linked = ${linked[@]}"
 
 				elif [ "$options" == "capacity" ]; then
-					echo "$who << capacity = ${state[1]#*/}"
-					log "accept query capacity from $who, capacity = ${state[1]#*/}"
+					echo "$who << capacity = $((${state[1]#*/}))"
+					log "accept query capacity from $who, capacity = $((${state[1]#*/}))"
 
 				elif [ "$options" == "loading" ]; then
-					echo "$who << loading = ${state[1]}"
-					log "accept query loading from $who, loading = ${state[1]}"
+					echo "$who << loading = ${state[1]:-0/0}"
+					log "accept query loading from $who, loading = ${state[1]:-0/0}"
 
 				elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 					local ids=() id
@@ -532,7 +532,7 @@ observe_state() {
 notify_state() {
 	local linked=${@:-${linked[@]}}
 	[[ $linked ]] || return
-	local status=${state[@]}
+	local status="${state[@]:-init}"
 	printf "%s << state $status\n" $linked
 	log "state $status; notify $linked"
 }
@@ -540,13 +540,13 @@ notify_state() {
 notify_state_with_requests() {
 	local linked=${@:-${linked[@]}}
 	[[ $linked ]] || return
-	local status="${state[@]} (${!cmd[@]})"
+	local status="${state[@]:-init} (${!cmd[@]})"
 	printf "%s << state $status\n" $linked
 	log "state $status; notify $linked"
 }
 
 refresh_state() {
-	[ "$state" != "init" ] && observe_state && notify_state
+	[[ $state ]] && observe_state && notify_state
 }
 
 app() {
