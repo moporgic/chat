@@ -143,6 +143,15 @@ broker_routine() {
 			local load=${BASH_REMATCH[3]}
 			echo "$worker << confirm state $stat $load"
 			log "confirm that $worker state $stat $load"
+			if [[ ${BASH_REMATCH[4]} ]]; then
+				local assigned=($(filter_keys assign $worker))
+				erase_from assigned ${BASH_REMATCH[5]}
+				if [[ ${assigned[@]} ]]; then
+					queue=(${assigned[@]} ${queue[@]})
+					log "confirm that $worker disowned request ${assigned[@]} and re-enqueue ${assigned[@]}," \
+					    "queue = ($(omit ${queue[@]}))"
+				fi
+			fi
 			[ "$stat_last" == "hold" ] && stat="hold"
 			state[$worker]=$stat:$load
 			if [ "$stat_last" != "$stat" ] && (( ${#notify[$stat]} )); then
