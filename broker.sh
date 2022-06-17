@@ -184,30 +184,35 @@ broker_routine() {
 
 			if [ "$owner" == "$who" ]; then
 				for id in ${ids[@]}; do
-					if [ "$type" == "request" ] && [ "${state[$who]:0:4}" == "hold" ]; then
-						state[$who]="held":${state[$who]:5}
-					elif [ "$type" == "terminate" ] && [[ -v own[$id] ]]; then
-						echo "${own[$id]} << $confirm terminate $id"
-					fi
-
 					if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
 						log "confirm that $who ${confirm}ed $type $id"
 						if [ "$type" == "request" ]; then
+							unhold_worker_state $who 1
 							if [[ -v news[assign-${own[$id]}] ]]; then
 								echo "${own[$id]} << notify assign request $id to $who"
 								log "assigned request $id to $who, notify ${own[$id]}"
 							fi
 						elif [ "$type" == "response" ] || [ "$type" == "terminate" ]; then
+							if [ "$type" == "terminate" ]; then
+								if [[ -v own[$id] ]]; then
+									echo "${own[$id]} << $confirm terminate $id"
+								fi
+							fi
 							unset cmd[$id] own[$id] res[$id] tmdue[$id] tmout[$id] prefer[$id] assign[$id]
 						fi
 
 					elif [ "$confirm" == "reject" ]; then
 						if [ "$type" == "request" ]; then
 							unset assign[$id]
+							unhold_worker_state $who 0
 						elif [ "$type" == "response" ]; then
 							[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
 							unset res[$id]
 							echo "$requester << accept request $id"
+						elif [ "$type" == "terminate" ]; then
+							if [[ -v own[$id] ]]; then
+								echo "${own[$id]} << $confirm terminate $id"
+							fi
 						fi
 						if [ "$type" != "terminate" ]; then
 							queue=($id ${queue[@]})
@@ -799,6 +804,18 @@ discard_workers() {
 			log "revoke assigned request $id and re-enqueue $id, queue = ($(omit ${queue[@]}))"
 		done
 	done
+}
+
+unhold_worker_state() {
+	local worker=$1 hold=$2 stat load size
+	if [[ ${state[$worker]} == "hold"* ]]; then
+		load=${state[$worker]:5}
+		load=(${load/\// })
+		size=${load[1]}
+		load=$((load + hold))
+		(( load < size )) && stat="idle" || stat="busy"
+		state[$worker]=$stat:$load/$size
+	fi
 }
 
 init_system_io() {
