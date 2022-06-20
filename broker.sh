@@ -10,7 +10,7 @@ broker_main() {
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
 
-	log "broker version 2022-06-17 (protocol 0)"
+	log "broker version 2022-06-20 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -21,6 +21,7 @@ broker_main() {
 	declare -A prefer # [id]=worker
 	declare -A tmout # [id]=timeout
 	declare -A tmdue # [id]=due
+	declare -A hdue # [id]=due
 	declare -A state # [worker]=stat:load
 	declare -A news # [type-who]=subscribe
 	declare -A notify # [type]=subscriber...
@@ -145,7 +146,7 @@ broker_routine() {
 			log "confirm that $worker state $stat $load"
 			if [[ ${BASH_REMATCH[4]} ]]; then
 				local assigned=($(filter_keys assign $worker))
-				erase_from assigned ${BASH_REMATCH[5]}
+				erase_from assigned ${BASH_REMATCH[5]} ${!hdue[@]}
 				if [[ ${assigned[@]} ]]; then
 					queue=(${assigned[@]} ${queue[@]})
 					log "confirm that $worker disowned request ${assigned[@]} and re-enqueue ${assigned[@]}," \
@@ -160,26 +161,25 @@ broker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_confirm ]]; then
+			# ^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$
 			local who=${BASH_REMATCH[1]}
 			local confirm=${BASH_REMATCH[2]}
 			local type=${BASH_REMATCH[3]}
 			local id=${BASH_REMATCH[4]}
 
+			if [ "$type" == "response" ]; then
+				local owner=own
+			elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
+				local owner=assign
+			fi
+
 			if [[ $id =~ ^[0-9]+$ ]]; then
 				local ids=($id)
-				if [ "$type" == "response" ]; then
-					local owner=${own[$id]}
-				elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
-					local owner=${assign[$id]}
-				fi
+				owner=$owner[$id]
+				owner=${!owner}
 			else
-				if [ "$type" == "response" ]; then
-					local ids=($(filter_keys own "$id" "$who" | sort))
-				elif [ "$type" == "request" ] || [ "$type" == "terminate" ]; then
-					local ids=($(filter_keys assign "$id" "$who" | sort))
-				fi
-				local owner=
-				(( ${#ids[@]} )) && owner=$who
+				local ids=($(filter_keys $owner "$id" "$who" | sort))
+				[[ ${ids[@]} ]] && owner=$who || owner=
 			fi
 
 			if [ "$owner" == "$who" ]; then
@@ -187,6 +187,7 @@ broker_routine() {
 					if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
 						log "confirm that $who ${confirm}ed $type $id"
 						if [ "$type" == "request" ]; then
+							unset hdue[$id]
 							unhold_worker_state $who 1
 							if [[ -v news[assign-${own[$id]}] ]]; then
 								echo "${own[$id]} << notify assign request $id to $who"
@@ -198,25 +199,24 @@ broker_routine() {
 									echo "${own[$id]} << $confirm terminate $id"
 								fi
 							fi
-							unset cmd[$id] own[$id] res[$id] tmdue[$id] tmout[$id] prefer[$id] assign[$id]
+							unset cmd[$id] own[$id] res[$id] tmdue[$id] tmout[$id] hdue[$id] prefer[$id] assign[$id]
 						fi
-
 					elif [ "$confirm" == "reject" ]; then
-						if [ "$type" == "request" ]; then
-							unset assign[$id]
-							unhold_worker_state $who 0
-						elif [ "$type" == "response" ]; then
-							[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
-							unset res[$id]
-							echo "$requester << accept request $id"
+						if [ "$type" != "terminate" ]; then
+							if [ "$type" == "request" ]; then
+								unset assign[$id] hdue[$id]
+								unhold_worker_state $who 0
+							elif [ "$type" == "response" ]; then
+								[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
+								unset res[$id]
+								echo "$requester << accept request $id"
+							fi
+							queue=($id ${queue[@]})
+							log "confirm that $who ${confirm}ed $type $id and re-enqueue $id, queue = ($(omit ${queue[@]}))"
 						elif [ "$type" == "terminate" ]; then
 							if [[ -v own[$id] ]]; then
 								echo "${own[$id]} << $confirm terminate $id"
 							fi
-						fi
-						if [ "$type" != "terminate" ]; then
-							queue=($id ${queue[@]})
-							log "confirm that $who ${confirm}ed $type $id and re-enqueue $id, queue = ($(omit ${queue[@]}))"
 						fi
 					fi
 				done
@@ -327,7 +327,7 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker 2022-06-17"
+					echo "$who << protocol 0 broker 2022-06-20"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
@@ -623,11 +623,15 @@ broker_routine() {
 			fi
 
 		elif ! [ "$message" ]; then
-			current=$(date +%s%3N)
+			local current=$(date +%s%3N)
 			local id
 			for id in ${!tmdue[@]}; do
-				if (( $current > ${tmdue[$id]} )); then
-					local due=${tmdue[$id]}
+				local due=${tmdue[$id]}
+				if (( $current > $due )); then
+					local code="timeout"
+					local output=
+					res[$id]=$code:$output
+					echo "${own[$id]} << response $id $code {$output}"
 					log "request $id failed due to timeout" \
 					    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), notify ${own[$id]}"
 					if [[ -v assign[$id] ]]; then
@@ -637,10 +641,19 @@ broker_routine() {
 						erase_from queue $id
 					fi
 					unset assign[$id] tmdue[$id]
-					local code="timeout"
-					local output=
-					res[$id]=$code:$output
-					echo "${own[$id]} << response $id $code {$output}"
+				fi
+			done
+			for id in ${!hdue[@]}; do
+				local due=${hdue[$id]}
+				if (( $current > $due )); then
+					queue=($id ${queue[@]})
+					log "request $id failed to be assigned" \
+					    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3});" \
+					    "re-enqueue $id, queue = ($(omit ${queue[@]}))"
+					local worker=${assign[$id]}
+					unhold_worker_state $worker
+					echo "$worker << report state"
+					unset assign[$id] hdue[$id]
 				fi
 			done
 
@@ -661,7 +674,7 @@ broker_routine() {
 
 assign_requests() {
 	declare -A workers_for cost_for
-	local id worker stat pref workers max_cost
+	local id worker stat pref workers max_cost due
 
 	workers_for["*"]=$(for worker in ${!state[@]}; do
 		stat=${state[$worker]%/*}
@@ -687,6 +700,7 @@ assign_requests() {
 			log "assign request $id to $worker"
 			state[$worker]="hold":${state[$worker]:5}
 			assign[$id]=$worker
+			hdue[$id]=${due:=$(($(date +%s%3N)+${hold_timeout:-1000}))}
 			erase_from queue $id
 			id=; break
 		done
