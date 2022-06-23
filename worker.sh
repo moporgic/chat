@@ -10,7 +10,7 @@ worker_main() {
 	declare capacity=${capacity-$(nproc)}
 	declare logfile=${logfile}
 
-	log "worker version 2022-06-17 (protocol 0)"
+	log "worker version 2022-06-23 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -165,13 +165,13 @@ worker_routine() {
 
 				if [[ $info =~ $regex_logout ]]; then
 					local who=${BASH_REMATCH[1]}
+					if contains own $who && ! [ "${keep_unowned_tasks}" ]; then
+						log "$who logged out, discard assignments from $who..."
+						discard_owned_assets $(filter_keys own $who)
+					fi
 					if contains linked $who; then
 						log "$who disconnected, wait until $who come back..."
 						erase_from linked $who
-
-					elif contains own $who && ! [ "${keep_unowned_tasks}" ]; then
-						log "$who logged out"
-						discard_owned_assets $(filter_keys own $who)
 					fi
 
 				elif [[ $info =~ $regex_rename ]]; then
@@ -226,18 +226,19 @@ worker_routine() {
 						log "register worker on the chat system..."
 						echo "name $worker"
 					else
+						local who
+						if ! [ "${keep_unowned_tasks}" ] && (( ${#own[@]} )); then
+							for who in $(printf "%s\n" "${own[@]}" | sort | uniq); do
+								contains online $who && continue
+								log "$who logged out silently, discard assignments from $who..."
+								discard_owned_assets $(filter_keys own $who)
+							done
+						fi
 						for who in ${broker[@]}; do
 							contains online $who && continue
 							log "$who disconnected, wait until $who come back..."
 							erase_from linked $who
 						done
-						if ! [ "${keep_unowned_tasks}" ] && (( ${#own[@]} )); then
-							local who
-							for who in $(printf "%s\n" "${own[@]}" | sort | uniq); do
-								contains online $who || contains broker $who && continue
-								discard_owned_assets $(filter_keys own $who)
-							done
-						fi
 					fi
 				elif [[ "$info" == "failed name"* ]]; then
 					log "name $worker has been occupied, query online names..."
@@ -278,7 +279,7 @@ worker_routine() {
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 worker 2022-06-17"
+					echo "$who << protocol 0 worker 2022-06-23"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
@@ -499,7 +500,7 @@ change_broker() {
 	erase_from removed ${pending[@]}
 	log "confirm broker change: (${current[@]}) --> (${pending[@]})"
 	if [[ ${removed[@]} ]] && ! [ "${keep_unowned_tasks}" ]; then
-		log "broker has been changed, discard assignments of ${removed[@]}..."
+		log "broker has been changed, discard assignments from ${removed[@]}..."
 		local who
 		for who in ${removed[@]}; do
 			discard_owned_assets $(filter_keys own $who)
