@@ -10,7 +10,7 @@ broker_main() {
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
 
-	log "broker version 2022-06-23 (protocol 0)"
+	log "broker version 2022-06-24 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -54,93 +54,15 @@ broker_routine() {
 
 	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$"
 	local regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
+	local regex_terminate="^(\S+) >> terminate (.+)$"
 	local regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
 	local regex_worker_state="^(\S+) >> state (idle|busy) (\S+/\S+)( \((.*)\))?$"
-	local regex_others="^(\S+) >> (query|terminate|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
+	local regex_others="^(\S+) >> (query|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
 	local regex_chat_system="^(#|%) (.+)$"
 
 	local message
 	while input message; do
-		if [[ $message =~ $regex_request ]]; then
-			# ^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$
-			local requester=${BASH_REMATCH[1]}
-			local id=${BASH_REMATCH[4]}
-			local command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
-			local options=${BASH_REMATCH[8]}
-
-			if [ "${overview:-full}" != "full" ]; then
-				if [[ $id ]]; then
-					local reply="$id"
-				else
-					id=${id_next:-1}
-					while [[ -v own[$id] ]]; do id=$((id+1)); done
-					local reply="$id {$command}"
-				fi
-				if ! [[ -v own[$id] ]]; then
-					own[$id]=$requester
-					cmd[$id]=$command
-					local with= tmz= pfz=
-					[[ $options =~ timeout=([0-9]+.*) ]] && tmz=${BASH_REMATCH[1]} || tmz=$default_timeout
-					[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]} || pfz=$default_workers
-					if [[ ${tmz:-0} != 0* ]]; then
-						with+=${with:+ }timeout=$tmz
-						[[ $tmz =~ ^([0-9]+)([^0-9]*)$ ]]
-						tmz=${BASH_REMATCH[1]}
-						case ${BASH_REMATCH[2]:-s} in
-							h*) tmz=$((tmz*3600))000; ;;
-							ms) :; ;;
-							m*) tmz=$((tmz*60))000; ;;
-							*)  tmz=${tmz}000; ;;
-						esac
-						tmout[$id]=$tmz
-						tmdue[$id]=$(($(date +%s%3N)+$tmz))
-					fi
-					if [[ $pfz ]]; then
-						with+=${with:+ }worker=$pfz
-						prefer[$id]=$pfz
-					fi
-					queue+=($id)
-					id_next=$((id+1))
-					echo "$requester << accept request $reply"
-					log "accept request $id {$command} ${with:+with ${with// /,} }from $requester and" \
-					    "enqueue $id, queue = ($(omit ${queue[@]}))"
-				else
-					echo "$requester << reject request $reply"
-					log "reject request $id {$command} from $requester since id $id has been occupied"
-				fi
-			else
-				echo "$requester << reject request ${id:-{$command\}}"
-				log "reject request ${id:+$id }{$command} from $requester due to capacity," \
-				    "#cmd = ${#cmd[@]}, queue = ($(omit ${queue[@]}))"
-			fi
-
-		elif [[ $message =~ $regex_response ]]; then
-			# ^(\S+) >> response (\S+) (\S+) \{(.*)\}$
-			local worker=${BASH_REMATCH[1]}
-			local id=${BASH_REMATCH[2]}
-			local code=${BASH_REMATCH[3]}
-			local output=${BASH_REMATCH[4]}
-
-			if [ "${assign[$id]}" == "$worker" ]; then
-				unset assign[$id] tmdue[$id] hdue[$id]
-				echo "$worker << accept response $id"
-				if [[ -v cmd[$id] ]]; then
-					res[$id]=$code:$output
-					echo "${own[$id]} << response $id $code {$output}"
-					log "accept response $id $code {$output} from $worker and forward it to ${own[$id]}"
-				else
-					log "accept response $id $code {$output} from $worker but no such request"
-				fi
-			else
-				echo "$worker << accept response $id"
-				if [ "${assign[$id]}" ]; then
-					log "ignore response $id $code {$output} from $worker since it is owned by ${assign[$id]}"
-				else
-					log "ignore response $id $code {$output} from $worker since no such assignment"
-				fi
-			fi
-
-		elif [[ $message =~ $regex_worker_state ]]; then
+		if [[ $message =~ $regex_worker_state ]]; then
 			# ^(\S+) >> state (idle|busy) (\S+/\S+)( \((.*)\))?$
 			local worker=${BASH_REMATCH[1]}
 			local stat=${BASH_REMATCH[2]} stat_last=${state[$worker]:0:4}
@@ -238,110 +160,126 @@ broker_routine() {
 				log "ignore that $who ${confirm}ed $type $id since no such $type"
 			fi
 
-		elif [[ $message =~ $regex_chat_system ]]; then
-			# ^(#|%) (.+)$
-			local type=${BASH_REMATCH[1]}
-			local info=${BASH_REMATCH[2]}
+		elif [[ $message =~ $regex_request ]]; then
+			# ^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$
+			local requester=${BASH_REMATCH[1]}
+			local id=${BASH_REMATCH[4]}
+			local command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
+			local options=${BASH_REMATCH[8]}
 
-			if [ "$type" == "#" ]; then
-				local regex_logout="^logout: (\S+)$"
-				local regex_rename="^name: (\S+) becomes (\S+)$"
-
-				if [[ $info =~ $regex_logout ]]; then
-					local who=${BASH_REMATCH[1]}
-					log "$who logged out"
-					if [[ -v state[$who] ]]; then
-						discard_workers $who
-					fi
-					if ! [ "${keep_unowned_tasks}" ]; then
-						local id
-						for id in $(filter_keys own $who); do
-							unset cmd[$id] own[$id] tmout[$id] prefer[$id]
-							if [[ -v res[$id] ]]; then
-								unset res[$id]
-								log "discard request $id and response $id"
-							else
-								log "discard request $id"
-							fi
-							if [[ -v assign[$id] ]]; then
-								echo "${assign[$id]} << terminate $id"
-								log "terminate assigned request $id on ${assign[$id]}"
-								unset assign[$id] tmdue[$id] hdue[$id]
-							else
-								erase_from queue $id
-							fi
-						done
-					fi
-					local item
-					for item in $(vfmt=" %s " filter_keys notify "* $who *"); do
-						local subscribers=(${notify[$item]})
-						erase_from subscribers $who
-						notify[$item]=${subscribers[@]}
-						unset news[$item-$who]
-						log "unsubscribe $item for $who"
-					done
-
-				elif [[ $info =~ $regex_rename ]]; then
-					local who=${BASH_REMATCH[1]}
-					local new=${BASH_REMATCH[2]}
-					if [ "$new" != "$broker" ]; then
-						log "$who renamed as $new"
-						if [[ -v state[$who] ]]; then
-							state[$new]=${state[$who]}
-							unset state[$who]
-							log "transfer the worker state to $new"
-							local id
-							for id in $(filter_keys assign $who); do
-								log "transfer the ownership of assignment $id"
-								assign[$id]=$new
-							done
-						fi
-						local id
-						for id in $(filter_keys own $who); do
-							log "transfer the ownerships of request $id and response $id"
-							own[$id]=$new
-						done
-						local item
-						for item in $(vfmt=" %s " filter_keys notify "* $who *"); do
-							log "transfer the $item subscription to $new"
-							local subscribers=(${notify[$item]})
-							erase_from subscribers $who
-							subscribers+=($new)
-							notify[$item]=${subscribers[@]}
-							news[$item-$new]=${news[$item-$who]}
-							unset news[$item-$who]
-						done
-					fi
+			if [ "${overview:-full}" != "full" ]; then
+				if [[ $id ]]; then
+					local reply="$id"
+				else
+					id=${id_next:-1}
+					while [[ -v own[$id] ]]; do id=$((id+1)); done
+					local reply="$id {$command}"
 				fi
-
-			elif [ "$type" == "%" ]; then
-				if [[ "$info" == "protocol"* ]]; then
-					log "chat system protocol verified successfully"
-					log "register broker on the chat system..."
-					echo "name $broker"
-				elif [[ "$info" == "name"* ]]; then
-					log "registered as ${broker:=${info:6}} successfully"
-					if [ "$workers" ]; then
-						contact_workers ${workers[@]//:/ }
+				if ! [[ -v own[$id] ]]; then
+					own[$id]=$requester
+					cmd[$id]=$command
+					local with= tmz= pfz=
+					[[ $options =~ timeout=([0-9]+.*) ]] && tmz=${BASH_REMATCH[1]} || tmz=$default_timeout
+					[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]} || pfz=$default_workers
+					if [[ ${tmz:-0} != 0* ]]; then
+						with+=${with:+ }timeout=$tmz
+						[[ $tmz =~ ^([0-9]+)([^0-9]*)$ ]]
+						tmz=${BASH_REMATCH[1]}
+						case ${BASH_REMATCH[2]:-s} in
+							h*) tmz=$((tmz*3600))000; ;;
+							ms) :; ;;
+							m*) tmz=$((tmz*60))000; ;;
+							*)  tmz=${tmz}000; ;;
+						esac
+						tmout[$id]=$tmz
+						tmdue[$id]=$(($(date +%s%3N)+$tmz))
 					fi
-				elif [[ "$info" == "failed protocol"* ]]; then
-					log "unsupported protocol; shutdown"
-					return 1
-				elif [[ "$info" == "failed name"* ]]; then
-					log "another $broker is already running? shutdown"
-					return 2
+					if [[ $pfz ]]; then
+						with+=${with:+ }worker=$pfz
+						prefer[$id]=$pfz
+					fi
+					queue+=($id)
+					id_next=$((id+1))
+					echo "$requester << accept request $reply"
+					log "accept request $id {$command} ${with:+with ${with// /,} }from $requester and" \
+					    "enqueue $id, queue = ($(omit ${queue[@]}))"
+				else
+					echo "$requester << reject request $reply"
+					log "reject request $id {$command} from $requester since id $id has been occupied"
+				fi
+			else
+				echo "$requester << reject request ${id:-{$command\}}"
+				log "reject request ${id:+$id }{$command} from $requester due to capacity," \
+				    "#cmd = ${#cmd[@]}, queue = ($(omit ${queue[@]}))"
+			fi
+
+		elif [[ $message =~ $regex_response ]]; then
+			# ^(\S+) >> response (\S+) (\S+) \{(.*)\}$
+			local worker=${BASH_REMATCH[1]}
+			local id=${BASH_REMATCH[2]}
+			local code=${BASH_REMATCH[3]}
+			local output=${BASH_REMATCH[4]}
+
+			if [ "${assign[$id]}" == "$worker" ]; then
+				unset assign[$id] tmdue[$id] hdue[$id]
+				echo "$worker << accept response $id"
+				if [[ -v cmd[$id] ]]; then
+					res[$id]=$code:$output
+					echo "${own[$id]} << response $id $code {$output}"
+					log "accept response $id $code {$output} from $worker and forward it to ${own[$id]}"
+				else
+					log "accept response $id $code {$output} from $worker but no such request"
+				fi
+			else
+				echo "$worker << accept response $id"
+				if [ "${assign[$id]}" ]; then
+					log "ignore response $id $code {$output} from $worker since it is owned by ${assign[$id]}"
+				else
+					log "ignore response $id $code {$output} from $worker since no such assignment"
 				fi
 			fi
 
+		elif [[ $message =~ $regex_terminate ]]; then
+			# ^(\S+) >> terminate (.+)$
+			local who=${BASH_REMATCH[1]}
+			local id=${BASH_REMATCH[2]}
+
+			for id in $(erase_from=${!res[@]} filter_owned_ids own "$id" "$who"); do
+				if [ "${own[$id]}" == "$who" ] && [[ ! -v res[$id] ]]; then
+					echo "$who << accept terminate $id"
+					if [[ -v assign[$id] ]]; then
+						[[ -v hdue[$id] ]] && unhold_worker_state ${assign[$id]}
+						echo "${assign[$id]} << terminate $id"
+						log "accept terminate $id from $who and forward it to ${assign[$id]}"
+					else
+						erase_from queue $id
+						log "accept terminate $id from $who and remove it from queue, queue = ($(omit ${queue[@]}))"
+					fi
+					unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id] assign[$id] hdue[$id]
+
+				elif [ "${own[$id]}" == "$who" ] && [[ ! -v res[$id] ]]; then
+					echo "$who << reject terminate $id"
+					log "reject terminate $id from $who since it is owned by ${own[$id]}"
+				else
+					echo "$who << reject terminate $id"
+					log "reject terminate $id from $who since no such request"
+				fi
+			done
+
+			if [[ ! $id =~ ^[0-9]+$ ]]; then
+				echo "$who << reject terminate $id"
+				log "reject terminate $id from $who since no such request"
+			fi
+
 		elif [[ $message =~ $regex_others ]]; then
-			# ^(\S+) >> (query|terminate|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$
+			# ^(\S+) >> (query|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$
 			local who=${BASH_REMATCH[1]}
 			local command=${BASH_REMATCH[2]}
 			local options=${BASH_REMATCH[3]}
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker 2022-06-23"
+					echo "$who << protocol 0 broker 2022-06-24"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
@@ -447,35 +385,6 @@ broker_routine() {
 					} &
 				else
 					log "ignore $command $options from $who"
-				fi
-
-			elif [ "$command" == "terminate" ]; then
-				local id=$options
-				for id in $(erase_from=${!res[@]} filter_owned_ids own "$id" "$who"); do
-					if [ "${own[$id]}" == "$who" ] && [[ ! -v res[$id] ]]; then
-						echo "$who << accept terminate $id"
-						if [[ -v assign[$id] ]]; then
-							[[ -v hdue[$id] ]] && unhold_worker_state ${assign[$id]}
-							echo "${assign[$id]} << terminate $id"
-							log "accept terminate $id from $who and forward it to ${assign[$id]}"
-						else
-							erase_from queue $id
-							log "accept terminate $id from $who and remove it from queue, queue = ($(omit ${queue[@]}))"
-						fi
-						unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id] assign[$id] hdue[$id]
-
-					elif [ "${own[$id]}" == "$who" ] && [[ ! -v res[$id] ]]; then
-						echo "$who << reject terminate $id"
-						log "reject terminate $id from $who since it is owned by ${own[$id]}"
-					else
-						echo "$who << reject terminate $id"
-						log "reject terminate $id from $who since no such request"
-					fi
-				done
-
-				if [[ ! $id =~ ^[0-9]+$ ]]; then
-					echo "$who << reject terminate $id"
-					log "reject terminate $id from $who since no such request"
 				fi
 
 			elif [ "$command" == "use" ]; then
@@ -633,6 +542,101 @@ broker_routine() {
 
 			else
 				log "ignore $command $options from $who"
+			fi
+
+		elif [[ $message =~ $regex_chat_system ]]; then
+			# ^(#|%) (.+)$
+			local type=${BASH_REMATCH[1]}
+			local info=${BASH_REMATCH[2]}
+
+			if [ "$type" == "#" ]; then
+				local regex_logout="^logout: (\S+)$"
+				local regex_rename="^name: (\S+) becomes (\S+)$"
+
+				if [[ $info =~ $regex_logout ]]; then
+					local who=${BASH_REMATCH[1]}
+					log "$who logged out"
+					if [[ -v state[$who] ]]; then
+						discard_workers $who
+					fi
+					if ! [ "${keep_unowned_tasks}" ]; then
+						local id
+						for id in $(filter_keys own $who); do
+							unset cmd[$id] own[$id] tmout[$id] prefer[$id]
+							if [[ -v res[$id] ]]; then
+								unset res[$id]
+								log "discard request $id and response $id"
+							else
+								log "discard request $id"
+							fi
+							if [[ -v assign[$id] ]]; then
+								echo "${assign[$id]} << terminate $id"
+								log "terminate assigned request $id on ${assign[$id]}"
+								unset assign[$id] tmdue[$id] hdue[$id]
+							else
+								erase_from queue $id
+							fi
+						done
+					fi
+					local item
+					for item in $(vfmt=" %s " filter_keys notify "* $who *"); do
+						local subscribers=(${notify[$item]})
+						erase_from subscribers $who
+						notify[$item]=${subscribers[@]}
+						unset news[$item-$who]
+						log "unsubscribe $item for $who"
+					done
+
+				elif [[ $info =~ $regex_rename ]]; then
+					local who=${BASH_REMATCH[1]}
+					local new=${BASH_REMATCH[2]}
+					if [ "$new" != "$broker" ]; then
+						log "$who renamed as $new"
+						if [[ -v state[$who] ]]; then
+							state[$new]=${state[$who]}
+							unset state[$who]
+							log "transfer the worker state to $new"
+							local id
+							for id in $(filter_keys assign $who); do
+								log "transfer the ownership of assignment $id"
+								assign[$id]=$new
+							done
+						fi
+						local id
+						for id in $(filter_keys own $who); do
+							log "transfer the ownerships of request $id and response $id"
+							own[$id]=$new
+						done
+						local item
+						for item in $(vfmt=" %s " filter_keys notify "* $who *"); do
+							log "transfer the $item subscription to $new"
+							local subscribers=(${notify[$item]})
+							erase_from subscribers $who
+							subscribers+=($new)
+							notify[$item]=${subscribers[@]}
+							news[$item-$new]=${news[$item-$who]}
+							unset news[$item-$who]
+						done
+					fi
+				fi
+
+			elif [ "$type" == "%" ]; then
+				if [[ "$info" == "protocol"* ]]; then
+					log "chat system protocol verified successfully"
+					log "register broker on the chat system..."
+					echo "name $broker"
+				elif [[ "$info" == "name"* ]]; then
+					log "registered as ${broker:=${info:6}} successfully"
+					if [ "$workers" ]; then
+						contact_workers ${workers[@]//:/ }
+					fi
+				elif [[ "$info" == "failed protocol"* ]]; then
+					log "unsupported protocol; shutdown"
+					return 1
+				elif [[ "$info" == "failed name"* ]]; then
+					log "another $broker is already running? shutdown"
+					return 2
+				fi
 			fi
 
 		elif ! [ "$message" ]; then

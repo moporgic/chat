@@ -10,7 +10,7 @@ worker_main() {
 	declare capacity=${capacity-$(nproc)}
 	declare logfile=${logfile}
 
-	log "worker version 2022-06-23 (protocol 0)"
+	log "worker version 2022-06-24 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -41,15 +41,63 @@ worker_routine() {
 	echo "protocol 0"
 
 	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$"
-	local regex_confirm_response="^(\S+) >> (accept|reject) response (\S+)$"
-	local regex_confirm_others="^(\S+) >> (confirm|accept|reject) (state|protocol) (.+)$"
+	local regex_confirm="^(\S+) >> (confirm|accept|reject) (state|response|protocol) (.+)$"
 	local regex_terminate="^(\S+) >> terminate (\S+)$"
 	local regex_others="^(\S+) >> (operate|shell|set|unset|use|query|report) (.+)$"
 	local regex_chat_system="^(#|%) (.+)$"
 
 	local message
 	while input message; do
-		if [[ $message =~ $regex_request ]]; then
+		if [[ $message =~ $regex_confirm ]]; then
+			# ^(\S+) >> (confirm|accept|reject) (state|response|protocol) (.+)$
+			local who=${BASH_REMATCH[1]}
+			local confirm=${BASH_REMATCH[2]}
+			local what=${BASH_REMATCH[3]}
+			local option=${BASH_REMATCH[4]}
+
+			if [ "$confirm $what" == "confirm state" ]; then
+				log "$who confirmed state $option"
+
+			elif [ "$what" == "response" ]; then
+				local id=$option
+
+				if [[ -v res[$id] ]]; then
+					if [ "${own[$id]}" == "$who" ]; then
+						log "confirm that $who ${confirm}ed response $id"
+						if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
+							unset own[$id] cmd[$id] res[$id] pid[$id]
+						elif [ "$confirm" == "reject" ]; then
+							unset pid[$id] res[$id]
+							echo "$who << accept request $id"
+							log "execute request $id {${cmd[$id]}}..."
+							execute $id >&${res_fd} {res_fd}>&- &
+							pid[$id]=$!
+						fi
+					else
+						log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
+					fi
+				else
+					log "ignore that $who ${confirm}ed response $id since no such response"
+				fi
+
+			elif [ "$what" == "protocol" ]; then
+				if [ "$confirm" == "accept" ]; then
+					log "handshake with $who successfully"
+					erase_from linked $who
+					linked+=($who)
+					observe_state; notify_state $who
+
+				elif [ "$confirm" == "reject" ]; then
+					log "handshake failed, unsupported protocol; shutdown"
+					return 2
+				fi
+
+			else
+				log "ignore that $who $confirm $what $option from $who"
+			fi
+
+		elif [[ $message =~ $regex_request ]]; then
+			# ^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$
 			local requester=${BASH_REMATCH[1]}
 			local id=${BASH_REMATCH[4]}
 			local command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
@@ -81,56 +129,8 @@ worker_routine() {
 				log "reject request ${id:+$id }{$command} from $requester, state = ${state[@]:-init}"
 			fi
 
-		elif [[ $message =~ $regex_confirm_response ]]; then
-			local who=${BASH_REMATCH[1]}
-			local confirm=${BASH_REMATCH[2]}
-			local id=${BASH_REMATCH[3]}
-
-			if [[ -v own[$id] ]]; then
-				if [ "${own[$id]}" == "$who" ]; then
-					log "confirm that $who ${confirm}ed response $id"
-					if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
-						unset own[$id] cmd[$id] res[$id] pid[$id]
-					elif [ "$confirm" == "reject" ]; then
-						unset pid[$id] res[$id]
-						echo "$who << accept request $id"
-						log "execute request $id {${cmd[$id]}}..."
-						execute $id >&${res_fd} {res_fd}>&- &
-						pid[$id]=$!
-					fi
-				else
-					log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
-				fi
-			else
-				log "ignore that $who ${confirm}ed response $id since no such response"
-			fi
-
-		elif [[ $message =~ $regex_confirm_others ]]; then
-			local who=${BASH_REMATCH[1]}
-			local confirm=${BASH_REMATCH[2]}
-			local what=${BASH_REMATCH[3]}
-			local option=${BASH_REMATCH[4]}
-
-			if [ "$confirm $what" == "confirm state" ]; then
-				log "$who confirmed state $option"
-
-			elif [ "$what" == "protocol" ]; then
-				if [ "$confirm" == "accept" ]; then
-					log "handshake with $who successfully"
-					erase_from linked $who
-					linked+=($who)
-					observe_state; notify_state $who
-
-				elif [ "$confirm" == "reject" ]; then
-					log "handshake failed, unsupported protocol; shutdown"
-					return 2
-				fi
-
-			else
-				log "ignore that $who $confirm $what $option from $who"
-			fi
-
 		elif [[ $message =~ $regex_terminate ]]; then
+			# ^(\S+) >> terminate (\S+)$
 			local who=${BASH_REMATCH[1]}
 			local id=${BASH_REMATCH[2]}
 
@@ -154,105 +154,8 @@ worker_routine() {
 				log "reject terminate $id from $who since no such request"
 			fi
 
-		elif [[ $message =~ $regex_chat_system ]]; then
-			local type=${BASH_REMATCH[1]}
-			local info=${BASH_REMATCH[2]}
-
-			if [ "$type" == "#" ]; then
-				local regex_login="^login: (\S+)$"
-				local regex_logout="^logout: (\S+)$"
-				local regex_rename="^name: (\S+) becomes (\S+)$"
-
-				if [[ $info =~ $regex_logout ]]; then
-					local who=${BASH_REMATCH[1]}
-					if contains own $who && ! [ "${keep_unowned_tasks}" ]; then
-						log "$who logged out, discard assignments from $who..."
-						discard_owned_assets $(filter_keys own $who)
-					fi
-					if contains linked $who; then
-						log "$who disconnected, wait until $who come back..."
-						erase_from linked $who
-					fi
-
-				elif [[ $info =~ $regex_rename ]]; then
-					local who=${BASH_REMATCH[1]}
-					local new=${BASH_REMATCH[2]}
-
-					if contains own $who; then
-						log "$who renamed as $new, transfer ownerships..."
-						local id
-						for id in $(filter_keys own $who); do own[$id]=$new; done
-					fi
-					if contains linked $who; then
-						erase_from broker $who
-						erase_from linked $who
-						log "$who renamed as $new, make handshake (protocol 0) with $new again..."
-						echo "$new << use protocol 0"
-					fi
-					if contains broker $new; then
-						log "$new connected, make handshake (protocol 0) with $new..."
-						echo "$new << use protocol 0"
-					fi
-
-				elif [[ $info =~ $regex_login ]]; then
-					local who=${BASH_REMATCH[1]}
-
-					if [[ " ${broker[@]} " == *" $who "* ]]; then
-						log "$who connected, make handshake (protocol 0) with $who..."
-						echo "$who << use protocol 0"
-					fi
-				fi
-
-			elif [ "$type" == "%" ]; then
-				if [[ "$info" == "protocol"* ]]; then
-					log "chat system protocol verified successfully"
-					log "register worker on the chat system..."
-					echo "name $worker"
-				elif [[ "$info" == "name"* ]]; then
-					log "registered as ${worker:=${info:6}} successfully"
-					observe_state
-					if [[ ${broker[@]} ]]; then
-						log "make handshake (protocol 0) with ${broker[@]}..."
-						printf "%s << use protocol 0\n" "${broker[@]}"
-					fi
-				elif [[ "$info" == "who: "* ]]; then
-					local online=(${info:5})
-					if [[ ! $state ]]; then
-						if [[ $worker ]]; then
-							while contains online $worker; do
-								worker=${worker%-*}-$((${worker##*-}+1))
-							done
-						fi
-						log "register worker on the chat system..."
-						echo "name $worker"
-					else
-						local who
-						if ! [ "${keep_unowned_tasks}" ] && (( ${#own[@]} )); then
-							for who in $(printf "%s\n" "${own[@]}" | sort | uniq); do
-								contains online $who && continue
-								log "$who logged out silently, discard assignments from $who..."
-								discard_owned_assets $(filter_keys own $who)
-							done
-						fi
-						for who in ${broker[@]}; do
-							contains online $who && continue
-							log "$who disconnected, wait until $who come back..."
-							erase_from linked $who
-						done
-					fi
-				elif [[ "$info" == "failed name"* ]]; then
-					log "name $worker has been occupied, query online names..."
-					echo "who"
-				elif [[ "$info" == "failed chat"* ]]; then
-					log "failed chat, check online names..."
-					echo "who"
-				elif [[ "$info" == "failed protocol"* ]]; then
-					log "unsupported protocol; shutdown"
-					return 1
-				fi
-			fi
-
 		elif [[ $message =~ $regex_others ]]; then
+			# ^(\S+) >> (operate|shell|set|unset|use|query|report) (.+)$
 			local who=${BASH_REMATCH[1]}
 			local command=${BASH_REMATCH[2]}
 			local options=${BASH_REMATCH[3]}
@@ -279,7 +182,7 @@ worker_routine() {
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 worker 2022-06-23"
+					echo "$who << protocol 0 worker 2022-06-24"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
@@ -426,6 +329,105 @@ worker_routine() {
 
 			else
 				log "ignore $command $options from $who"
+			fi
+
+		elif [[ $message =~ $regex_chat_system ]]; then
+			# ^(#|%) (.+)$
+			local type=${BASH_REMATCH[1]}
+			local info=${BASH_REMATCH[2]}
+
+			if [ "$type" == "#" ]; then
+				local regex_login="^login: (\S+)$"
+				local regex_logout="^logout: (\S+)$"
+				local regex_rename="^name: (\S+) becomes (\S+)$"
+
+				if [[ $info =~ $regex_logout ]]; then
+					local who=${BASH_REMATCH[1]}
+					if contains own $who && ! [ "${keep_unowned_tasks}" ]; then
+						log "$who logged out, discard assignments from $who..."
+						discard_owned_assets $(filter_keys own $who)
+					fi
+					if contains linked $who; then
+						log "$who disconnected, wait until $who come back..."
+						erase_from linked $who
+					fi
+
+				elif [[ $info =~ $regex_rename ]]; then
+					local who=${BASH_REMATCH[1]}
+					local new=${BASH_REMATCH[2]}
+
+					if contains own $who; then
+						log "$who renamed as $new, transfer ownerships..."
+						local id
+						for id in $(filter_keys own $who); do own[$id]=$new; done
+					fi
+					if contains linked $who; then
+						erase_from broker $who
+						erase_from linked $who
+						log "$who renamed as $new, make handshake (protocol 0) with $new again..."
+						echo "$new << use protocol 0"
+					fi
+					if contains broker $new; then
+						log "$new connected, make handshake (protocol 0) with $new..."
+						echo "$new << use protocol 0"
+					fi
+
+				elif [[ $info =~ $regex_login ]]; then
+					local who=${BASH_REMATCH[1]}
+
+					if [[ " ${broker[@]} " == *" $who "* ]]; then
+						log "$who connected, make handshake (protocol 0) with $who..."
+						echo "$who << use protocol 0"
+					fi
+				fi
+
+			elif [ "$type" == "%" ]; then
+				if [[ "$info" == "protocol"* ]]; then
+					log "chat system protocol verified successfully"
+					log "register worker on the chat system..."
+					echo "name $worker"
+				elif [[ "$info" == "name"* ]]; then
+					log "registered as ${worker:=${info:6}} successfully"
+					observe_state
+					if [[ ${broker[@]} ]]; then
+						log "make handshake (protocol 0) with ${broker[@]}..."
+						printf "%s << use protocol 0\n" "${broker[@]}"
+					fi
+				elif [[ "$info" == "who: "* ]]; then
+					local online=(${info:5})
+					if [[ ! $state ]]; then
+						if [[ $worker ]]; then
+							while contains online $worker; do
+								worker=${worker%-*}-$((${worker##*-}+1))
+							done
+						fi
+						log "register worker on the chat system..."
+						echo "name $worker"
+					else
+						local who
+						if ! [ "${keep_unowned_tasks}" ] && (( ${#own[@]} )); then
+							for who in $(printf "%s\n" "${own[@]}" | sort | uniq); do
+								contains online $who && continue
+								log "$who logged out silently, discard assignments from $who..."
+								discard_owned_assets $(filter_keys own $who)
+							done
+						fi
+						for who in ${broker[@]}; do
+							contains online $who && continue
+							log "$who disconnected, wait until $who come back..."
+							erase_from linked $who
+						done
+					fi
+				elif [[ "$info" == "failed name"* ]]; then
+					log "name $worker has been occupied, query online names..."
+					echo "who"
+				elif [[ "$info" == "failed chat"* ]]; then
+					log "failed chat, check online names..."
+					echo "who"
+				elif [[ "$info" == "failed protocol"* ]]; then
+					log "unsupported protocol; shutdown"
+					return 1
+				fi
 			fi
 
 		elif ! [ "$message" ]; then
