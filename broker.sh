@@ -65,10 +65,13 @@ broker_routine() {
 		if [[ $message =~ $regex_worker_state ]]; then
 			# ^(\S+) >> state (idle|busy) (\S+/\S+)( \((.*)\))?$
 			local worker=${BASH_REMATCH[1]}
-			local stat=${BASH_REMATCH[2]} stat_last=${state[$worker]:0:4}
+			local stat=${BASH_REMATCH[2]}
 			local load=${BASH_REMATCH[3]}
 			echo "$worker << confirm state $stat $load"
 			log "confirm that $worker state $stat $load"
+			[ "${state[$worker]:0:4}" == "hold" ] && stat="hold"
+			state[$worker]=$stat:$load
+
 			if [[ ${BASH_REMATCH[4]} ]]; then
 				local assigned=($(filter_keys assign $worker))
 				erase_from assigned ${BASH_REMATCH[5]} ${!hdue[@]}
@@ -77,12 +80,6 @@ broker_routine() {
 					log "confirm that $worker disowned request ${assigned[@]} and re-enqueue ${assigned[@]}," \
 					    "queue = ($(omit ${queue[@]}))"
 				fi
-			fi
-			[ "$stat_last" == "hold" ] && stat="hold"
-			state[$worker]=$stat:$load
-			if [ "$stat_last" != "$stat" ] && (( ${#notify[$stat]} )); then
-				printf "%s << notify $worker state $stat\n" ${notify[$stat]}
-				log "state has been changed, notify ${notify[$stat]}"
 			fi
 
 		elif [[ $message =~ $regex_confirm ]]; then
@@ -102,6 +99,13 @@ broker_routine() {
 							if [[ -v news[assign-${own[$id]}] ]]; then
 								echo "${own[$id]} << notify assign request $id to $who"
 								log "assigned request $id to $who, notify ${own[$id]}"
+							fi
+							if [[ -v news[idle-${own[$id]}] ]]; then
+								observe_overview
+								if [ "${overview[0]}" == "idle" ]; then
+									echo "${own[$id]} << notify state idle"
+									log "state idle, notify ${own[$id]}"
+								fi
 							fi
 						elif [ "$confirm" == "reject" ]; then
 							unset assign[$id]
@@ -403,7 +407,7 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "subscribe" ]; then
-				if [[ $options =~ ^(state|status|idle|busy|assign|capacity)$ ]]; then
+				if [[ $options =~ ^(state|status|idle|assign|capacity)$ ]]; then
 					local item=$options
 					local subscribers=(${notify[$item]})
 					erase_from subscribers $who
@@ -412,8 +416,9 @@ broker_routine() {
 					news[$item-$who]=subscribe
 					echo "$who << accept $command $options"
 					log "accept $command $options from $who"
-					if [ "$item" == "idle" ] || [ "$item" == "busy" ]; then
-						filter_keys state "$item:*" | xargs -r printf "$who << notify %s state $item\n"
+					if [ "$item" == "idle" ]; then
+						observe_overview
+						[ "${overview[0]}" == "$item" ] && echo "$who << notify state $item"
 					elif [ "$item" == "state" ]; then
 						observe_overview; observe_state
 						echo "$who << notify state ${system_state[@]}"
@@ -430,7 +435,7 @@ broker_routine() {
 				fi
 
 			elif [ "$command" == "unsubscribe" ]; then
-				if [[ $options =~ ^(state|status|idle|busy|assign|capacity)$ ]]; then
+				if [[ $options =~ ^(state|status|idle|assign|capacity)$ ]]; then
 					local item=$options
 					local subscribers=(${notify[$item]})
 					erase_from subscribers $who
@@ -803,7 +808,12 @@ observe_capacity() {
 }
 
 refresh_observations() {
+	local stat_last=$overview
 	observe_overview
+	if [[ ${notify[idle]} ]] && [ "$overview" == "idle" && "$overview" != "$stat_last" ]; then
+		printf "%s << notify state idle\n" ${notify[idle]}
+		log "state idle, notify ${notify[idle]}"
+	fi
 	if (( ${#notify[state]} )) && observe_state; then
 		local notify_state=${system_state[@]}
 		printf "%s << notify state $notify_state\n" ${notify[state]}
