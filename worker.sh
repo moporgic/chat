@@ -10,7 +10,7 @@ worker_main() {
 	declare capacity=${capacity-$(nproc)}
 	declare logfile=${logfile}
 
-	log "worker version 2022-06-24 (protocol 0)"
+	log "worker version 2022-06-26 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -103,7 +103,7 @@ worker_routine() {
 			local command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
 			local options=${BASH_REMATCH[8]}
 
-			if [ "$state" == "idle" ]; then
+			if [ "$state" == "idle" ] && ( [[ ! $request_whitelist ]] || contains broker $requester ); then
 				if [[ $id ]]; then
 					local reply="$id"
 				else
@@ -126,7 +126,9 @@ worker_routine() {
 				fi
 			else
 				echo "$requester << reject request ${id:-{$command\}}"
-				log "reject request ${id:+$id }{$command} from $requester, state = ${state[@]:-init}"
+				local reason="state = ${state[@]:-init}"
+				[[ $request_whitelist ]] && reason+=", whitelist = (${broker[@]})"
+				log "reject request ${id:+$id }{$command} from $requester, $reason"
 			fi
 
 		elif [[ $message =~ $regex_terminate ]]; then
@@ -182,7 +184,7 @@ worker_routine() {
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 worker 2022-06-24"
+					echo "$who << protocol 0 worker 2022-06-26"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
@@ -501,7 +503,7 @@ change_broker() {
 	erase_from added ${current[@]}
 	erase_from removed ${pending[@]}
 	log "confirm broker change: (${current[@]}) --> (${pending[@]})"
-	if [[ ${removed[@]} ]] && ! [ "${keep_unowned_tasks}" ]; then
+	if [[ ${removed[@]} ]] && [[ ${request_whitelist} ]]; then
 		log "broker has been changed, discard assignments from ${removed[@]}..."
 		local who
 		for who in ${removed[@]}; do
