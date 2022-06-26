@@ -527,6 +527,11 @@ broker_routine() {
 						done
 					fi
 
+				elif [[ "$options" == "output "* ]]; then
+					local output=${options:7}
+					echo "$output"
+					log "accept operate output \"$output\" from $who"
+
 				else
 					log "ignore $command $options from $who"
 				fi

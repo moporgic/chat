@@ -312,6 +312,11 @@ worker_routine() {
 					[[ $tcp_fd ]] && exec 0<&- 1>&-
 					exec $0 "${args[@]}"
 
+				elif [[ "$options" == "output "* ]]; then
+					local output=${options:7}
+					echo "$output"
+					log "accept operate output \"$output\" from $who"
+
 				else
 					log "ignore $command $options from $who"
 				fi
