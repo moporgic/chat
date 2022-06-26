@@ -368,8 +368,8 @@ worker_routine() {
 						erase_from linked $who
 						log "$who renamed as $new, make handshake (protocol 0) with $new again..."
 						echo "$new << use protocol 0"
-					fi
-					if contains broker $new; then
+
+					elif contains broker $new; then
 						log "$new connected, make handshake (protocol 0) with $new..."
 						echo "$new << use protocol 0"
 					fi
@@ -377,7 +377,7 @@ worker_routine() {
 				elif [[ $info =~ $regex_login ]]; then
 					local who=${BASH_REMATCH[1]}
 
-					if [[ " ${broker[@]} " == *" $who "* ]]; then
+					if [[ " ${broker[@]} " == *" $who "* ]] && ! contains linked $who; then
 						log "$who connected, make handshake (protocol 0) with $who..."
 						echo "$who << use protocol 0"
 					fi
@@ -391,9 +391,11 @@ worker_routine() {
 				elif [[ "$info" == "name"* ]]; then
 					log "registered as ${worker:=${info:6}} successfully"
 					observe_state
-					if [[ ${broker[@]} ]]; then
-						log "make handshake (protocol 0) with ${broker[@]}..."
-						printf "%s << use protocol 0\n" "${broker[@]}"
+					local handshake=(${broker[@]})
+					erase_from handshake ${linked[@]}
+					if [[ ${handshake[@]} ]]; then
+						log "make handshake (protocol 0) with ${handshake[@]}..."
+						printf "%s << use protocol 0\n" "${handshake[@]}"
 					fi
 				elif [[ "$info" == "who: "* ]]; then
 					local online=(${info:5})
