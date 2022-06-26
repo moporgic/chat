@@ -10,7 +10,7 @@ broker_main() {
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
 
-	log "broker version 2022-06-24 (protocol 0)"
+	log "broker version 2022-06-26 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -42,6 +42,7 @@ broker_main() {
 
 broker_routine() {
 	declare -a overview=() # idle 16/128 48/65536 16+32+0
+	declare -a lastview=() # idle 16/128 48/65536 16+32+0
 	declare -a system_state=() # idle 16/128
 	declare -a system_status=() # idle 16/128 48/65536 16+32+0 [A]=idle:2/4 [B]=idle:8/16 ...
 	declare -a system_capacity=() # 128 65536 [A]=4 [B]=16 ...
@@ -102,7 +103,7 @@ broker_routine() {
 							fi
 							if [[ -v news[idle-${own[$id]}] ]]; then
 								observe_overview
-								if [ "${overview[0]}" == "idle" ]; then
+								if [ "$overview" == "idle" ]; then
 									echo "${own[$id]} << notify state idle"
 									log "state idle, notify ${own[$id]}"
 								fi
@@ -283,16 +284,15 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker 2022-06-24"
+					echo "$who << protocol 0 broker 2022-06-26"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
-					observe_overview
 					echo "$who << overview = ${overview[@]}"
 					log "accept query overview from $who, overview = ${overview[@]}"
 
 				elif [ "$options" == "capacity" ]; then
-					observe_overview; observe_capacity
+					observe_capacity
 					echo "$who << capacity = ${system_capacity[@]:0:2} (${system_capacity[@]:2})"
 					log "accept query capacity from $who, capacity = ${system_capacity[@]:0:2}" \
 					    "($(omit ${system_capacity[@]:2}))"
@@ -302,7 +302,7 @@ broker_routine() {
 					log "accept query queue from $who, queue = ($(omit ${queue[@]}))"
 
 				elif [[ "$options" =~ ^(states?|status)$ ]]; then
-					observe_overview; observe_status
+					observe_status
 					echo "$who << state = ${system_status[@]:0:4} (${system_status[@]:4})"
 					log "accept query state from $who," \
 					    "state = ${system_status[@]:0:4} ($(omit ${system_status[@]:4}))"
@@ -417,16 +417,15 @@ broker_routine() {
 					echo "$who << accept $command $options"
 					log "accept $command $options from $who"
 					if [ "$item" == "idle" ]; then
-						observe_overview
 						[ "${overview[0]}" == "$item" ] && echo "$who << notify state $item"
 					elif [ "$item" == "state" ]; then
-						observe_overview; observe_state
+						observe_state
 						echo "$who << notify state ${system_state[@]}"
 					elif [ "$item" == "status" ]; then
-						observe_overview; observe_status
+						observe_status
 						echo "$who << notify state ${system_status[@]}"
 					elif [ "$item" == "capacity" ]; then
-						observe_overview; observe_capacity
+						observe_capacity
 						echo "$who << notify capacity ${system_capacity[@]}"
 					fi
 				else
@@ -743,6 +742,7 @@ extract_anchor_cost() {
 
 observe_overview() {
 	local overview_last=${overview[@]}
+	lastview=(${overview[@]})
 
 	overview=() # idle 16/128 48/65536 16+32+0
 	size_details=() # [A]=4 [B]=16 ...
@@ -808,11 +808,11 @@ observe_capacity() {
 }
 
 refresh_observations() {
-	local stat_last=$overview
 	observe_overview
-	if [[ ${notify[idle]} ]] && [ "$overview" == "idle" && "$overview" != "$stat_last" ]; then
-		printf "%s << notify state idle\n" ${notify[idle]}
-		log "state idle, notify ${notify[idle]}"
+	if [[ ${notify[$overview]} ]] && [ "$overview" != "$lastview" ]; then
+		local notify_stat=$overview
+		printf "%s << notify state $notify_stat\n" ${notify[$overview]}
+		log "state $notify_stat, notify ${notify[$overview]}"
 	fi
 	if (( ${#notify[state]} )) && observe_state; then
 		local notify_state=${system_state[@]}
