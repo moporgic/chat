@@ -686,6 +686,8 @@ broker_routine() {
 				fi
 			done
 
+			jobs >/dev/null 2>&1
+
 		else
 			log "ignore message: $message"
 		fi

@@ -440,7 +440,7 @@ worker_routine() {
 			fi
 
 		elif ! [ "$message" ]; then
-			:
+			jobs >/dev/null 2>&1
 
 		else
 			log "ignore message: $message"
