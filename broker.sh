@@ -833,7 +833,7 @@ refresh_observations() {
 
 contact_workers() {
 	(( "$#" )) || return
-	printf "%s << report state\n" "$@"
+	printf "%s << report status\n" "$@"
 	log "contact $@ for worker state"
 }
 
