@@ -10,7 +10,7 @@ broker_main() {
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
 
-	log "broker version 2022-06-26 (protocol 0)"
+	log "broker version 2022-06-28 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -284,7 +284,7 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker 2022-06-26"
+					echo "$who << protocol 0 broker 2022-06-28"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
@@ -581,6 +581,7 @@ broker_routine() {
 							if [[ -v assign[$id] ]]; then
 								echo "${assign[$id]} << terminate $id"
 								log "terminate assigned request $id on ${assign[$id]}"
+								[[ -v hdue[$id] ]] && unhold_worker_state ${assign[$id]}
 								unset assign[$id] tmdue[$id] hdue[$id]
 							else
 								erase_from queue $id
