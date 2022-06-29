@@ -69,7 +69,7 @@ worker_routine() {
 						elif [ "$confirm" == "reject" ]; then
 							unset pid[$id] res[$id]
 							echo "$who << accept request $id"
-							log "execute request $id {${cmd[$id]}}..."
+							log "execute request $id..."
 							execute $id >&${res_fd} {res_fd}>&- &
 							pid[$id]=$!
 						fi
@@ -117,7 +117,7 @@ worker_routine() {
 					id_next=$((id+1))
 					echo "$requester << accept request $reply"
 					log "accept request $id {$command} from $requester"
-					log "execute request $id {${cmd[$id]}}..."
+					log "execute request $id..."
 					execute $id >&${res_fd} {res_fd}>&- &
 					pid[$id]=$!
 				else
@@ -142,9 +142,7 @@ worker_routine() {
 					log "accept terminate $id from $who"
 					local cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
 					if [[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null; then
-						log "request $id {${cmd[$id]}} with pid $cmd_pid has been terminated successfully"
-					else
-						log "request $id {${cmd[$id]}} is already terminated"
+						log "request $id (pid $cmd_pid) has been terminated successfully"
 					fi
 					unset own[$id] cmd[$id] res[$id] pid[$id]
 				else
