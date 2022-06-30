@@ -695,24 +695,21 @@ filter_keys() {
 }
 
 contains() {
-	local list=${1:-_}[@]
-	local value=${2}
-	[[ " ${!list} " == *" $value "* ]]
+	local show=${1:-_}[@]
+	[[ " ${!show} " == *" ${2} "* ]]
 }
 
 erase_from() {
-	local list=${1:-_}
-	local show=${list}[@]
+	local show=${1:-_}[@]
 	local show=" ${!show} " item
 	for item in "${@:2}"; do show=${show/ $item / }; done
-	eval "$list=($show)"
+	eval "${1:-_}=($show)"
 }
 
 retain_from() {
-	local list=${1:-_}
 	local show=() item
-	for item in "${@:2}"; do contains $list $item && show+=($item); done
-	eval "$list=(${show[@]})"
+	for item in "${@:2}"; do contains ${1:-_} $item && show+=($item); done
+	eval "${1:-_}=(${show[@]})"
 }
 
 xargs_eval() {
