@@ -245,11 +245,11 @@ worker_routine() {
 					log "accept query options from $who, options = ($(omit ${vars[@]}))"
 
 				elif [ "$options" == "envinfo" ]; then
-					echo "$who << accept query envinfo"
-					log "accept query envinfo from $who"
 					local envinfo=$(envinfo)
-					echo "$who << result envinfo ($(<<<$envinfo wc -l))"
+					local envitem=$(cut -d: -f1 <<< "$envinfo" | xargs)
+					echo "$who << envinfo = ($envitem)"
 					<<< $envinfo xargs -r -d'\n' -L1 echo "$who << #"
+					log "accept query envinfo from $who, envinfo = ($envitem)"
 
 				else
 					log "ignore $command $options from $who"
