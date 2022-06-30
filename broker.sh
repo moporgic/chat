@@ -382,14 +382,13 @@ broker_routine() {
 				elif [ "$options" == "envinfo" ]; then
 					echo "$who << accept query envinfo"
 					log "accept query envinfo from $who"
-					{
-						local envinfo=$(envinfo)
-						echo "$who << result envinfo ($(<<<$envinfo wc -l))"
-						<<< $envinfo xargs -r -d'\n' -L1 echo "$who << #"
-					} &
+					local envinfo=$(envinfo)
+					echo "$who << result envinfo ($(<<<$envinfo wc -l))"
+					<<< $envinfo xargs -r -d'\n' -L1 echo "$who << #"
+
 				else
 					log "ignore $command $options from $who"
-				fi
+				fi &
 
 			elif [ "$command" == "use" ]; then
 				local regex_use_protocol="^protocol (\S+)$"
