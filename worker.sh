@@ -14,7 +14,7 @@ worker_main() {
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
-	declare -A own # [id]=requester
+	declare -A own # [id]=owner
 	declare -A cmd # [id]=command
 	declare -A res # [id]=code:output
 	declare -A pid # [id]=PID
@@ -98,37 +98,36 @@ worker_routine() {
 
 		elif [[ $message =~ $regex_request ]]; then
 			# ^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$
-			local requester=${BASH_REMATCH[1]}
+			local owner=${BASH_REMATCH[1]}
 			local id=${BASH_REMATCH[4]}
 			local command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
 			local options=${BASH_REMATCH[8]}
 
-			if [ "$state" == "idle" ] && ( [[ ! $request_whitelist ]] || contains broker $requester ); then
-				if [[ $id ]]; then
-					local reply="$id"
-				else
+			if [ "$state" == "idle" ] && ( [[ ! $request_whitelist ]] || contains broker $owner ); then
+				local reply="$id"
+				if [[ ! $id ]]; then
 					id=${id_next:-1}
 					while [[ -v own[$id] ]]; do id=$((id+1)); done
-					local reply="$id {$command}"
+					reply="$id {$command}"
 				fi
-				if ! [[ -v own[$id] ]]; then
-					own[$id]=$requester
+				if [[ ! -v own[$id] ]]; then
+					own[$id]=$owner
 					cmd[$id]=$command
 					id_next=$((id+1))
-					echo "$requester << accept request $reply"
-					log "accept request $id {$command} from $requester"
+					echo "$owner << accept request $reply"
+					log "accept request $id {$command} from $owner"
 					log "execute request $id..."
 					execute $id >&${res_fd} {res_fd}>&- &
 					pid[$id]=$!
 				else
-					echo "$requester << reject request $reply"
-					log "reject request $id {$command} from $requester since id $id has been occupied"
+					echo "$owner << reject request $reply"
+					log "reject request $id {$command} from $owner since id $id has been occupied"
 				fi
 			else
-				echo "$requester << reject request ${id:-{$command\}}"
+				echo "$owner << reject request ${id:-{$command\}}"
 				local reason="state = ${state[@]:-init}"
 				[[ $request_whitelist ]] && reason+=", whitelist = (${broker[@]})"
-				log "reject request ${id:+$id }{$command} from $requester, $reason"
+				log "reject request ${id:+$id }{$command} from $owner, $reason"
 			fi
 
 		elif [[ $message =~ $regex_terminate ]]; then

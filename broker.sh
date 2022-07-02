@@ -14,7 +14,7 @@ broker_main() {
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
-	declare -A own # [id]=requester
+	declare -A own # [id]=owner
 	declare -A cmd # [id]=command
 	declare -A res # [id]=code:output
 	declare -A assign # [id]=worker
@@ -167,54 +167,48 @@ broker_routine() {
 
 		elif [[ $message =~ $regex_request ]]; then
 			# ^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$
-			local requester=${BASH_REMATCH[1]}
+			local owner=${BASH_REMATCH[1]}
 			local id=${BASH_REMATCH[4]}
 			local command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
 			local options=${BASH_REMATCH[8]}
 
 			if [ "${overview:-full}" != "full" ]; then
-				if [[ $id ]]; then
-					local reply="$id"
-				else
+				local reply="$id"
+				if [[ ! $id ]]; then
 					id=${id_next:-1}
 					while [[ -v own[$id] ]]; do id=$((id+1)); done
-					local reply="$id {$command}"
+					reply="$id {$command}"
 				fi
-				if ! [[ -v own[$id] ]]; then
-					own[$id]=$requester
+				if [[ ! -v own[$id] ]]; then
+					own[$id]=$owner
 					cmd[$id]=$command
-					local with= tmz= pfz=
-					[[ $options =~ timeout=([0-9]+.*) ]] && tmz=${BASH_REMATCH[1]} || tmz=$default_timeout
-					[[ $options =~ worker=([^ ]+) ]] && pfz=${BASH_REMATCH[1]} || pfz=$default_workers
-					if [[ ${tmz:-0} != 0* ]]; then
-						with+=${with:+ }timeout=$tmz
-						[[ $tmz =~ ^([0-9]+)([^0-9]*)$ ]]
-						tmz=${BASH_REMATCH[1]}
+					local with=
+					if [[ "$options timeout=$default_timeout" =~ timeout=([1-9][0-9]*)([a-z]*) ]]; then
+						with+=${with:+ }${BASH_REMATCH[0]}
 						case ${BASH_REMATCH[2]:-s} in
-							h*) tmz=$((tmz*3600))000; ;;
-							ms) :; ;;
-							m*) tmz=$((tmz*60))000; ;;
-							*)  tmz=${tmz}000; ;;
+							h*) tmout[$id]=$((BASH_REMATCH[1]*3600))000; ;;
+							ms) tmout[$id]=$((BASH_REMATCH[1])); ;;
+							m*) tmout[$id]=$((BASH_REMATCH[1]*60))000; ;;
+							*)  tmout[$id]=$((BASH_REMATCH[1]))000; ;;
 						esac
-						tmout[$id]=$tmz
-						tmdue[$id]=$(($(date +%s%3N)+$tmz))
+						tmdue[$id]=$(($(date +%s%3N)+tmout[$id]))
 					fi
-					if [[ $pfz ]]; then
-						with+=${with:+ }worker=$pfz
-						prefer[$id]=$pfz
+					if [[ "$options workers=$default_workers" =~ workers?=([^ ]+) ]]; then
+						with+=${with:+ }${BASH_REMATCH[0]}
+						prefer[$id]=${BASH_REMATCH[1]}
 					fi
 					queue+=($id)
 					id_next=$((id+1))
-					echo "$requester << accept request $reply"
-					log "accept request $id {$command} ${with:+with ${with// /,} }from $requester and" \
+					echo "$owner << accept request $reply"
+					log "accept request $id {$command} ${with:+with ${with// /,} }from $owner and" \
 					    "enqueue $id, queue = ($(omit ${queue[@]}))"
 				else
-					echo "$requester << reject request $reply"
-					log "reject request $id {$command} from $requester since id $id has been occupied"
+					echo "$owner << reject request $reply"
+					log "reject request $id {$command} from $owner since id $id has been occupied"
 				fi
 			else
-				echo "$requester << reject request ${id:-{$command\}}"
-				log "reject request ${id:+$id }{$command} from $requester due to capacity," \
+				echo "$owner << reject request ${id:-{$command\}}"
+				log "reject request ${id:+$id }{$command} from $owner due to capacity," \
 				    "#cmd = ${#cmd[@]}, queue = ($(omit ${queue[@]}))"
 			fi
 
