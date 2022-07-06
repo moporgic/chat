@@ -10,7 +10,7 @@ broker_main() {
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
 
-	log "broker version 2022-06-28 (protocol 0)"
+	log "broker version 2022-07-06 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -91,7 +91,7 @@ broker_routine() {
 			local id=${BASH_REMATCH[4]}
 
 			if [ "$type" == "request" ]; then
-				for id in $(filter_owned_ids assign "$id" "$who"); do
+				for id in $(retain_from=${!hdue[@]} filter_owned_ids assign "$id" "$who"); do
 					if [ "${assign[$id]}" == "$who" ] && [[ -v hdue[$id] ]]; then
 						unset hdue[$id]
 						if [ "$confirm" == "accept" ]; then
@@ -123,7 +123,7 @@ broker_routine() {
 				done
 
 			elif [ "$type" == "response" ]; then
-				for id in $(filter_owned_ids own "$id" "$who"); do
+				for id in $(retain_from=${!res[@]} filter_owned_ids own "$id" "$who"); do
 					if [ "${own[$id]}" == "$who" ] && [[ -v res[$id] ]]; then
 						unset res[$id]
 						if [ "$confirm" == "accept" ]; then
@@ -286,7 +286,7 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker 2022-06-28"
+					echo "$who << protocol 0 broker 2022-07-06"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
@@ -873,9 +873,10 @@ unhold_worker_state() {
 
 filter_owned_ids() {
 	local owned=${1:-own} id=${2:-"$id"} who=${3:-"$who"}
-	if [[ ! $id =~ ^[0-9]+$ ]]; then
+	if [[ $id == *[^0-9]* ]]; then
 		id=($(filter_keys "$owned" "$id" "$who" | sort))
-		[[ $erase_from ]] && erase_from id $erase_from
+		[ -v retain_from ] && retain_from id $retain_from
+		[ -v erase_from ] && erase_from id $erase_from
 	fi
 	echo ${id[@]}
 }
