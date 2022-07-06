@@ -6,7 +6,7 @@ broker_main() {
 
 	declare broker=${broker-broker}
 	declare capacity=${capacity-65536}
-	declare default_timeout=${default_timeout:-0}
+	declare default_timeout=${default_timeout}
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
 
@@ -179,32 +179,40 @@ broker_routine() {
 					while [[ -v own[$id] ]]; do id=$((id+1)); done
 					reply="$id {$command}"
 				fi
-				if [[ ! -v own[$id] ]]; then
+				local opt_timeout=$default_timeout
+				if [[ $options =~ timeout=([^ ]*) ]]; then
+					opt_timeout=${BASH_REMATCH[1]}
+					options=${options/${BASH_REMATCH[0]}}
+				fi
+				local opt_workers=$default_workers
+				if [[ $options =~ workers?=([^ ]*) ]]; then
+					opt_workers=${BASH_REMATCH[1]}
+					options=${options/${BASH_REMATCH[0]}}
+				fi
+				if [[ ! -v own[$id] ]] && [[ ! ${options// } ]]; then
 					own[$id]=$owner
 					cmd[$id]=$command
-					local with=
-					if [[ "$options timeout=$default_timeout" =~ timeout=([1-9][0-9]*)([a-z]*) ]]; then
-						with+=${with:+ }${BASH_REMATCH[0]}
-						case ${BASH_REMATCH[2]:-s} in
-							h*) tmout[$id]=$((BASH_REMATCH[1]*3600))000; ;;
-							ms) tmout[$id]=$((BASH_REMATCH[1])); ;;
-							m*) tmout[$id]=$((BASH_REMATCH[1]*60))000; ;;
-							*)  tmout[$id]=$((BASH_REMATCH[1]))000; ;;
-						esac
+					options=
+					if [[ $opt_timeout == [1-9]* ]]; then
+						tmout[$id]=$(millisec $opt_timeout)
 						tmdue[$id]=$(($(date +%s%3N)+tmout[$id]))
+						options+="timeout=$opt_timeout "
 					fi
-					if [[ "$options workers=$default_workers" =~ workers?=([^ ]+) ]]; then
-						with+=${with:+ }${BASH_REMATCH[0]}
-						prefer[$id]=${BASH_REMATCH[1]}
+					if [[ $opt_workers ]]; then
+						prefer[$id]=$opt_workers
+						options+="workers=$opt_workers "
 					fi
 					queue+=($id)
 					id_next=$((id+1))
 					echo "$owner << accept request $reply"
-					log "accept request $id {$command} ${with:+with ${with// /,} }from $owner and" \
+					log "accept request $id {$command} ${options:+with $options}from $owner and" \
 					    "enqueue $id, queue = ($(omit ${queue[@]}))"
-				else
+				elif [[ -v own[$id] ]]; then
 					echo "$owner << reject request $reply"
 					log "reject request $id {$command} from $owner since id $id has been occupied"
+				elif [[ ${options// } ]]; then
+					echo "$owner << reject request $reply"
+					log "reject request $id {$command} from $owner due to unsupported option $(<<<$options xargs -rn1)"
 				fi
 			else
 				echo "$owner << reject request ${id:-{$command\}}"
@@ -870,6 +878,16 @@ filter_owned_ids() {
 		[[ $erase_from ]] && erase_from id $erase_from
 	fi
 	echo ${id[@]}
+}
+
+millisec() {
+	[[ $1 =~ ^[0-9]* ]]
+	case "${1:${#BASH_REMATCH}}" in
+		h*) echo $((BASH_REMATCH*3600000)); ;;
+		ms) echo $((BASH_REMATCH)); ;;
+		m*) echo $((BASH_REMATCH*60000)); ;;
+		*)  echo $((BASH_REMATCH*1000)); ;;
+	esac
 }
 
 init_system_io() {
