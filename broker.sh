@@ -53,7 +53,7 @@ broker_routine() {
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
 
-	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$"
+	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$"
 	local regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
 	local regex_terminate="^(\S+) >> terminate (.+)$"
 	local regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
@@ -166,7 +166,7 @@ broker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_request ]]; then
-			# ^(\S+) >> request ((([0-9]+) )?\{(.+)\}( with( ([^{}]+)| ?))?|(.+))$
+			# ^(\S+) >> request ((([0-9]+) )?\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$
 			local owner=${BASH_REMATCH[1]}
 			local id=${BASH_REMATCH[4]}
 			local command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
