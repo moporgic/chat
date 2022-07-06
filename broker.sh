@@ -78,8 +78,7 @@ broker_routine() {
 				erase_from assigned ${BASH_REMATCH[5]} ${!hdue[@]}
 				if [[ ${assigned[@]} ]]; then
 					queue=(${assigned[@]} ${queue[@]})
-					log "confirm that $worker disowned request ${assigned[@]} and re-enqueue ${assigned[@]}," \
-					    "queue = ($(omit ${queue[@]}))"
+					log "confirm that $worker disowned request ${assigned[@]}, queue = ($(omit ${queue[@]}))"
 				fi
 			fi
 
@@ -112,7 +111,7 @@ broker_routine() {
 							unset assign[$id]
 							unhold_worker_state $who 0
 							queue=($id ${queue[@]})
-							log "confirm that $who ${confirm}ed $type $id and re-enqueue $id, queue = ($(omit ${queue[@]}))"
+							log "confirm that $who ${confirm}ed $type $id, queue = ($(omit ${queue[@]}))"
 						fi
 
 					elif [ "${assign[$id]}" ] && [[ -v hdue[$id] ]]; then
@@ -134,7 +133,7 @@ broker_routine() {
 							[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
 							echo "$who << accept request $id"
 							queue=($id ${queue[@]})
-							log "confirm that $who ${confirm}ed $type $id and re-enqueue $id, queue = ($(omit ${queue[@]}))"
+							log "confirm that $who ${confirm}ed $type $id, queue = ($(omit ${queue[@]}))"
 						fi
 
 					elif [ "${own[$id]}" ] && [[ -v res[$id] ]]; then
@@ -150,7 +149,7 @@ broker_routine() {
 						if [ "$confirm" != "reject" ] && [[ -v assign[$id] ]]; then
 							unset assign[$id] hdue[$id]
 							queue=($id ${queue[@]})
-							log "confirm that $who ${confirm}ed $type $id and re-enqueue $id, queue = ($(omit ${queue[@]}))"
+							log "confirm that $who ${confirm}ed $type $id, queue = ($(omit ${queue[@]}))"
 						else
 							log "confirm that $who ${confirm}ed $type $id"
 						fi
@@ -205,8 +204,7 @@ broker_routine() {
 					queue+=($id)
 					id_next=$((id+1))
 					echo "$owner << accept request $reply"
-					log "accept request $id {$command} ${options:+with $options}from $owner and" \
-					    "enqueue $id, queue = ($(omit ${queue[@]}))"
+					log "accept request $id {$command} ${options:+with $options}from $owner, queue = ($(omit ${queue[@]}))"
 				elif [[ -v own[$id] ]]; then
 					echo "$owner << reject request $reply"
 					log "reject request $id {$command} from $owner since id $id has been occupied"
@@ -486,7 +484,7 @@ broker_routine() {
 				if [[ "$options" =~ $regex_operate_power ]]; then
 					local type=${BASH_REMATCH[1]}
 					local patt=${BASH_REMATCH[2]:-$broker}
-					local matches=($(<<<$patt grep -Eo '\S+' | xargs_eval "filter \"{}\" ${!state[@]} $broker"))
+					local matches=($(<<<$patt xargs -rn1 | xargs_eval "filter \"{}\" ${!state[@]} $broker"))
 
 					local match
 					for match in ${matches[@]}; do
@@ -522,7 +520,7 @@ broker_routine() {
 					elif [ "$type" == "discard" ]; then
 						log "accept operate $type $patt from $who"
 						local worker
-						for worker in $(<<<$patt grep -Eo '\S+' | xargs_eval "filter \"{}\" ${!state[@]}"); do
+						for worker in $(<<<$patt xargs -rn1 | xargs_eval "filter \"{}\" ${!state[@]}"); do
 							printf "$who << confirm $type %s\n" $worker
 							discard_workers $worker
 						done
@@ -680,8 +678,7 @@ broker_routine() {
 				if (( $current > $due )); then
 					queue=($id ${queue[@]})
 					log "request $id failed to be assigned" \
-					    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3});" \
-					    "re-enqueue $id, queue = ($(omit ${queue[@]}))"
+					    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), queue = ($(omit ${queue[@]}))"
 					unhold_worker_state ${assign[$id]}
 					echo "${assign[$id]} << report state"
 					unset assign[$id] hdue[$id]
@@ -854,7 +851,7 @@ discard_workers() {
 		for id in $(filter_keys assign $worker); do
 			unset assign[$id]
 			queue=($id ${queue[@]})
-			log "revoke assigned request $id and re-enqueue $id, queue = ($(omit ${queue[@]}))"
+			log "revoke assigned request $id, queue = ($(omit ${queue[@]}))"
 		done
 	done
 }
