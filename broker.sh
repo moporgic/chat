@@ -961,16 +961,23 @@ contains() {
 }
 
 erase_from() {
-	local show=${1:-_}[@]
-	local show=" ${!show} " item
-	for item in "${@:2}"; do show=${show/ $item / }; done
-	eval "${1:-_}=($show)"
+	local -n from=$1
+	local patt=" ${@:2} "
+	local save item
+	for item in ${from[@]}; do
+		[[ $patt == *" $item "* ]] || save+="$item "
+	done
+	eval "${1:-_}=($save)"
 }
 
 retain_from() {
-	local show=() item
-	for item in "${@:2}"; do contains ${1:-_} $item && show+=($item); done
-	eval "${1:-_}=(${show[@]})"
+	local -n from=$1
+	local patt=" ${@:2} "
+	local save item
+	for item in ${from[@]}; do
+		[[ $patt == *" $item "* ]] && save+="$item "
+	done
+	eval "${1:-_}=($save)"
 }
 
 xargs_eval() {
