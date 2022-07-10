@@ -10,7 +10,7 @@ broker_main() {
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
 
-	log "broker version 2022-07-06 (protocol 0)"
+	log "broker version 2022-07-10 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -55,7 +55,7 @@ broker_routine() {
 
 	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$"
 	local regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
-	local regex_terminate="^(\S+) >> terminate (.+)$"
+	local regex_terminate="^(\S+) >> terminate (\S+)$"
 	local regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
 	local regex_worker_state="^(\S+) >> state (idle|busy) (\S+/\S+)( \((.*)\))?$"
 	local regex_others="^(\S+) >> (query|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
@@ -90,78 +90,90 @@ broker_routine() {
 			local id=${BASH_REMATCH[4]}
 
 			if [ "$type" == "request" ]; then
-				for id in $(retain_from=${!hdue[@]} filter_owned_ids assign "$id" "$who"); do
-					if [ "${assign[$id]}" == "$who" ] && [[ -v hdue[$id] ]]; then
-						unset hdue[$id]
-						if [ "$confirm" == "accept" ]; then
-							unhold_worker_state $who 1
-							log "confirm that $who ${confirm}ed $type $id"
-							if [[ -v news[assign-${own[$id]}] ]]; then
-								echo "${own[$id]} << notify assign request $id to $who"
-								log "assigned request $id to $who, notify ${own[$id]}"
-							fi
-							if [[ -v news[idle-${own[$id]}] ]]; then
-								observe_overview
-								if [ "$overview" == "idle" ]; then
-									echo "${own[$id]} << notify state idle"
-									log "state idle, notify ${own[$id]}"
-								fi
-							fi
-						elif [ "$confirm" == "reject" ]; then
-							unset assign[$id]
-							unhold_worker_state $who 0
-							queue=($id ${queue[@]})
-							log "confirm that $who ${confirm}ed $type $id, queue = ($(omit ${queue[@]}))"
-						fi
-
-					elif [ "${assign[$id]}" ] && [[ -v hdue[$id] ]]; then
-						log "ignore that $who ${confirm}ed $type $id since it is owned by ${assign[$id]}"
-					else
-						log "ignore that $who ${confirm}ed $type $id since no such $type"
+				local ids=()
+				if [ "${assign[$id]}" == "$who" ] && [[ -v hdue[$id] ]]; then
+					ids=($id)
+				elif [[ $id == *[^0-9]* ]]; then
+					ids=($(filter_keys assign "$id" "$who" | sort -n))
+					retain_from ids ${!hdue[@]}
+				fi
+				if [[ ${ids[@]} ]] && [ "$confirm" == "accept" ]; then
+					unhold_worker_state $who ${#ids[@]}
+					log "confirm that $who ${confirm}ed $type ${ids[@]}"
+					if [[ ${notify[idle]} ]]; then
+						local stat
+						(( ${overview[3]%+*} < ${overview[1]#*/} )) && stat=idle || stat=busy
 					fi
-				done
+					for id in ${ids[@]}; do
+						unset hdue[$id]
+						if [[ -v news[assign-${own[$id]}] ]]; then
+							echo "${own[$id]} << notify assign request $id to $who"
+							log "assigned request $id to $who, notify ${own[$id]}"
+						fi
+						if [[ -v news[idle-${own[$id]}] ]] && [ "$stat" == "idle" ]; then
+							echo "${own[$id]} << notify state idle"
+							log "state idle, notify ${own[$id]}"
+						fi
+					done
+				elif [[ ${ids[@]} ]] && [ "$confirm" == "reject" ]; then
+					for id in ${ids[@]}; do
+						unset hdue[$id] assign[$id]
+					done
+					unhold_worker_state $who 0
+					queue=(${ids[@]} ${queue[@]})
+					log "confirm that $who ${confirm}ed $type ${ids[@]}, queue = ($(omit ${queue[@]}))"
+				else
+					log "ignore that $who ${confirm}ed $type $id since no such $type"
+				fi
 
 			elif [ "$type" == "response" ]; then
-				for id in $(retain_from=${!res[@]} filter_owned_ids own "$id" "$who"); do
-					if [ "${own[$id]}" == "$who" ] && [[ -v res[$id] ]]; then
+				local ids=()
+				if [ "${own[$id]}" == "$who" ] && [[ -v res[$id] ]]; then
+					ids=($id)
+				elif [[ $id == *[^0-9]* ]]; then
+					ids=($(filter_keys own "$id" "$who" | sort -n))
+					retain_from ids ${!res[@]}
+				fi
+				if [[ ${ids[@]} ]] && [ "$confirm" == "accept" ]; then
+					for id in ${ids[@]}; do
+						unset res[$id] cmd[$id] own[$id] tmout[$id] prefer[$id]
+					done
+					log "confirm that $who ${confirm}ed $type ${ids[@]}"
+				elif [[ ${ids[@]} ]] && [ "$confirm" == "reject" ]; then
+					for id in ${ids[@]}; do
 						unset res[$id]
-						if [ "$confirm" == "accept" ]; then
-							unset cmd[$id] own[$id] tmout[$id] prefer[$id]
-							log "confirm that $who ${confirm}ed $type $id"
-
-						elif [ "$confirm" == "reject" ]; then
-							[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
-							echo "$who << accept request $id"
-							queue=($id ${queue[@]})
-							log "confirm that $who ${confirm}ed $type $id, queue = ($(omit ${queue[@]}))"
-						fi
-
-					elif [ "${own[$id]}" ] && [[ -v res[$id] ]]; then
-						log "ignore that $who ${confirm}ed $type $id since it is owned by ${own[$id]}"
-					else
-						log "ignore that $who ${confirm}ed $type $id since no such $type"
-					fi
-				done
+						[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
+						echo "$who << accept request $id"
+					done
+					queue=(${ids[@]} ${queue[@]})
+					log "confirm that $who ${confirm}ed $type ${ids[@]}, queue = ($(omit ${queue[@]}))"
+				else
+					log "ignore that $who ${confirm}ed $type $id since no such $type"
+				fi
 
 			elif [ "$type" == "terminate" ]; then
-				for id in $(filter_owned_ids assign "$id" "$who"); do
-					if [ "${assign[$id]:-$who}" == "$who" ]; then
-						if [ "$confirm" != "reject" ] && [[ -v assign[$id] ]]; then
-							unset assign[$id] hdue[$id]
-							queue=($id ${queue[@]})
-							log "confirm that $who ${confirm}ed $type $id, queue = ($(omit ${queue[@]}))"
-						else
-							log "confirm that $who ${confirm}ed $type $id"
-						fi
-
-					else
-						log "ignore that $who ${confirm}ed $type $id since it is owned by ${assign[$id]}"
-					fi
-				done
-			fi
-
-			if [[ ! $id =~ ^[0-9]+$ ]]; then
-				log "ignore that $who ${confirm}ed $type $id since no such $type"
+				local ids=() ida=()
+				if [[ ! -v assign[$id] ]]; then
+					ids=($id)
+				elif [ "${assign[$id]}" == "$who" ]; then
+					ids=($id)
+					ida=($id)
+				elif [[ $id == *[^0-9]* ]]; then
+					ids=($(filter_keys assign "$id" "$who" | sort -n))
+					retain_from ids ${!assign[@]}
+					ida=(${ids[@]})
+				fi
+				if [[ ${ida[@]} ]] && [ "$confirm" != "reject" ]; then
+					for id in ${ida[@]}; do
+						unset assign[$id] hdue[$id]
+					done
+					queue=(${ida[@]} ${queue[@]})
+					log "confirm that $who ${confirm}ed $type ${ids[@]}, queue = ($(omit ${queue[@]}))"
+				elif [[ ${ids[@]} ]]; then
+					log "confirm that $who ${confirm}ed $type ${ids[@]}"
+				else
+					log "ignore that $who ${confirm}ed $type $id since no such $type"
+				fi
 			fi
 
 		elif [[ $message =~ $regex_request ]]; then
@@ -245,33 +257,35 @@ broker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_terminate ]]; then
-			# ^(\S+) >> terminate (.+)$
+			# ^(\S+) >> terminate (\S+)$
 			local who=${BASH_REMATCH[1]}
 			local id=${BASH_REMATCH[2]}
 
-			for id in $(erase_from=${!res[@]} filter_owned_ids own "$id" "$who"); do
-				if [ "${own[$id]}" == "$who" ] && [[ ! -v res[$id] ]]; then
+			local ids=()
+			if [ "${own[$id]}" == "$who" ] && [[ ! -v res[$id] ]]; then
+				ids=($id)
+			elif [[ $id == *[^0-9]* ]]; then
+				ids=($(filter_keys own "$id" "$who" | sort -n))
+				erase_from ids ${!res[@]}
+			fi
+			if [[ ${ids[@]} ]]; then
+				for id in ${ids[@]}; do
 					echo "$who << accept terminate $id"
 					if [[ -v assign[$id] ]]; then
 						[[ -v hdue[$id] ]] && unhold_worker_state ${assign[$id]}
 						echo "${assign[$id]} << terminate $id"
-						log "accept terminate $id from $who and forward it to ${assign[$id]}"
-					else
-						erase_from queue $id
-						log "accept terminate $id from $who and remove it from queue, queue = ($(omit ${queue[@]}))"
+						log "forward terminate $id to ${assign[$id]}"
+						unset assign[$id] hdue[$id]
 					fi
-					unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id] assign[$id] hdue[$id]
+					unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id]
+				done
+				erase_from queue ${ids[@]}
+				log "accept terminate ${ids[@]} from $who, queue = ($(omit ${queue[@]}))"
 
-				elif [ "${own[$id]}" == "$who" ] && [[ ! -v res[$id] ]]; then
-					echo "$who << reject terminate $id"
-					log "reject terminate $id from $who since it is owned by ${own[$id]}"
-				else
-					echo "$who << reject terminate $id"
-					log "reject terminate $id from $who since no such request"
-				fi
-			done
-
-			if [[ ! $id =~ ^[0-9]+$ ]]; then
+			elif [ "${own[$id]}" ] && [[ ! -v res[$id] ]]; then
+				echo "$who << reject terminate $id"
+				log "reject terminate $id from $who since it is owned by ${own[$id]}"
+			else
 				echo "$who << reject terminate $id"
 				log "reject terminate $id from $who since no such request"
 			fi
@@ -284,7 +298,7 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker 2022-07-06"
+					echo "$who << protocol 0 broker 2022-07-10"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
@@ -788,6 +802,11 @@ observe_overview() {
 	return $?
 }
 
+observe_idle() {
+	[ "$overview" != "$lastview" ] && (( ${overview[3]%+*} < ${overview[1]#*/} ))
+	return $?
+}
+
 observe_state() {
 	local system_state_last=${system_state[@]}
 	system_state=(${overview[@]:0:2})
@@ -815,10 +834,10 @@ observe_capacity() {
 
 refresh_observations() {
 	observe_overview
-	if [[ ${notify[$overview]} ]] && [ "$overview" != "$lastview" ]; then
+	if [[ ${notify[idle]} ]] && observe_idle; then
 		local notify_stat=$overview
-		printf "%s << notify state $notify_stat\n" ${notify[$overview]}
-		log "state $notify_stat, notify ${notify[$overview]}"
+		printf "%s << notify state $notify_stat\n" ${notify[idle]}
+		log "state $notify_stat, notify ${notify[idle]}"
 	fi
 	if (( ${#notify[state]} )) && observe_state; then
 		local notify_state=${system_state[@]}
@@ -866,16 +885,6 @@ unhold_worker_state() {
 		(( load < size )) && stat="idle" || stat="busy"
 		state[$worker]=$stat:$load/$size
 	fi
-}
-
-filter_owned_ids() {
-	local owned=${1:-own} id=${2:-"$id"} who=${3:-"$who"}
-	if [[ $id == *[^0-9]* ]]; then
-		id=($(filter_keys "$owned" "$id" "$who" | sort))
-		[ -v retain_from ] && retain_from id $retain_from
-		[ -v erase_from ] && erase_from id $erase_from
-	fi
-	echo ${id[@]}
 }
 
 millisec() {
