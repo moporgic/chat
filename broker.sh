@@ -163,7 +163,7 @@ broker_routine() {
 					retain_from ids ${!assign[@]}
 					ida=(${ids[@]})
 				fi
-				if [[ ${ida[@]} ]] && [ "$confirm" != "reject" ]; then
+				if [[ ${ida[@]} ]] && ([ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]); then
 					for id in ${ida[@]}; do
 						unset assign[$id] hdue[$id]
 					done

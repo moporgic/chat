@@ -10,7 +10,7 @@ worker_main() {
 	declare capacity=${capacity-$(nproc)}
 	declare logfile=${logfile}
 
-	log "worker version 2022-06-26 (protocol 0)"
+	log "worker version 2022-07-10 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -61,13 +61,13 @@ worker_routine() {
 			elif [ "$what" == "response" ]; then
 				local id=$option
 
-				if [[ -v res[$id] ]]; then
+				if [[ -v res[$id] ]] && [[ ! -v pid[$id] ]]; then
 					if [ "${own[$id]}" == "$who" ]; then
 						log "confirm that $who ${confirm}ed response $id"
 						if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
-							unset own[$id] cmd[$id] res[$id] pid[$id]
+							unset own[$id] cmd[$id] res[$id]
 						elif [ "$confirm" == "reject" ]; then
-							unset pid[$id] res[$id]
+							unset res[$id]
 							echo "$who << accept request $id"
 							log "execute request $id..."
 							execute $id >&${res_fd} {res_fd}>&- &
@@ -139,9 +139,9 @@ worker_routine() {
 				if [ "${own[$id]}" == "$who" ]; then
 					echo "$who << accept terminate $id"
 					log "accept terminate $id from $who"
-					local cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
-					if [[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null; then
-						log "request $id (pid $cmd_pid) has been terminated successfully"
+					local cmdpid=$(cmdpidof $id)
+					if [[ $cmdpid ]] && kill $cmdpid 2>/dev/null; then
+						log "request $id (pid $cmdpid) has been terminated successfully"
 					fi
 					unset own[$id] cmd[$id] res[$id] pid[$id]
 				else
@@ -170,7 +170,7 @@ worker_routine() {
 					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
 					retain_from ids $(filter_keys own $who)
-					retain_from ids ${!res[@]}
+					erase_from ids ${!pid[@]}
 					log "accept report responses from $who, responses = ($(omit ${ids[@]}))"
 					for id in ${ids[@]}; do
 						echo "$who << response $id ${res[$id]%%:*} {${res[$id]#*:}}"
@@ -181,7 +181,7 @@ worker_routine() {
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 worker 2022-06-26"
+					echo "$who << protocol 0 worker 2022-07-10"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
@@ -206,7 +206,7 @@ worker_routine() {
 					retain_from ids ${!cmd[@]}
 					echo "$who << jobs = (${ids[@]})"
 					for id in ${ids[@]}; do
-						if [[ -v res[$id] ]]; then
+						if [[ -v res[$id] ]] && [[ ! -v pid[$id] ]]; then
 							echo "$who << # $id {${cmd[$id]}} [${own[$id]}] = ${res[$id]%%:*} {${res[$id]#*:}}"
 						else
 							echo "$who << # $id {${cmd[$id]}} [${own[$id]}]"
@@ -218,7 +218,7 @@ worker_routine() {
 					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
 					retain_from ids $(filter_keys own $who)
-					erase_from ids ${!res[@]}
+					retain_from ids ${!pid[@]}
 					echo "$who << requests = (${ids[@]})"
 					for id in ${ids[@]}; do
 						echo "$who << # request $id {${cmd[$id]}}"
@@ -229,7 +229,7 @@ worker_routine() {
 					local ids=() id
 					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
 					retain_from ids $(filter_keys own $who)
-					retain_from ids ${!res[@]}
+					erase_from ids ${!pid[@]}
 					echo "$who << responses = (${ids[@]})"
 					for id in ${ids[@]}; do
 						echo "$who << # response $id ${res[$id]%%:*} {${res[$id]#*:}}"
@@ -448,6 +448,7 @@ worker_routine() {
 				res[$id]=$code:$output
 				log "complete response $id $code {$output} and forward it to ${own[$id]}"
 				echo "${own[$id]} << response $id $code {$output}"
+				unset pid[$id]
 			else
 				log "complete orphan response $id $code {$output}"
 			fi
@@ -461,14 +462,17 @@ worker_routine() {
 }
 
 execute() {
-	local id output code
-	id=$1
+	local id=$1 output code
 	output=$(eval "${cmd[$id]}" 2>&1)
 	code=$?
-	# drop ASCII terminal color codes then escape '\' '\n' '\t' with '\'
-	output=$(echo -n "$output" | sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
-	         sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]')
+	output=$(echo -n "$output" | format_output)
 	echo "response $id $code {$output}"
+}
+
+format_output() {
+	# drop ASCII terminal color codes then escape '\' '\n' '\t' with '\'
+	sed -r 's/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[mGK]//g' | \
+		sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]'
 }
 
 fetch_response() {
@@ -493,8 +497,8 @@ discard_owned_assets() {
 			log "discard request $id and response $id"
 		elif [[ -v pid[$id] ]]; then
 			log "discard and terminate request $id"
-			local cmd_pid=$(pgrep -P $(pgrep -P ${pid[$id]}) 2>/dev/null)
-			[[ $cmd_pid ]] && kill $cmd_pid 2>/dev/null
+			local cmdpid=$(cmdpidof $id)
+			[[ $cmdpid ]] && kill $cmdpid 2>/dev/null
 		fi
 		unset own[$id] cmd[$id] res[$id] pid[$id]
 	done
@@ -519,6 +523,10 @@ change_broker() {
 	fi
 	erase_from linked ${added[@]} ${removed[@]}
 	broker=(${pending[@]})
+}
+
+cmdpidof() {
+	{ pgrep -P $(pgrep -P ${pid[$1]}); } 2>/dev/null
 }
 
 observe_state() {
