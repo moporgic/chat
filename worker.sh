@@ -139,9 +139,8 @@ worker_routine() {
 				if [ "${own[$id]}" == "$who" ]; then
 					echo "$who << accept terminate $id"
 					log "accept terminate $id from $who"
-					local cmdpid=$(cmdpidof $id)
-					if [[ $cmdpid ]] && kill $cmdpid 2>/dev/null; then
-						log "request $id (pid $cmdpid) has been terminated successfully"
+					if kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null; then
+						log "request $id has been terminated successfully"
 					fi
 					unset own[$id] cmd[$id] res[$id] pid[$id]
 				else
@@ -497,8 +496,7 @@ discard_owned_assets() {
 			log "discard request $id and response $id"
 		elif [[ -v pid[$id] ]]; then
 			log "discard and terminate request $id"
-			local cmdpid=$(cmdpidof $id)
-			[[ $cmdpid ]] && kill $cmdpid 2>/dev/null
+			kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null
 		fi
 		unset own[$id] cmd[$id] res[$id] pid[$id]
 	done
