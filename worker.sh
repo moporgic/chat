@@ -1,8 +1,9 @@
 #!/bin/bash
 
 worker_main() {
-	declare "$@" >/dev/null 2>&1
+	declare "$@" >&- 2>&-
 	declare set_vars=("$@" broker worker capacity logfile)
+	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
 	declare broker=${broker-broker}
 	declare broker=(${broker//:/ })
@@ -10,7 +11,7 @@ worker_main() {
 	declare capacity=${capacity-$(nproc)}
 	declare logfile=${logfile}
 
-	log "worker version 2022-07-10 (protocol 0)"
+	log "worker version 2022-07-14 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -180,7 +181,7 @@ worker_routine() {
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 worker 2022-07-10"
+					echo "$who << protocol 0 worker 2022-07-14"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
@@ -270,6 +271,8 @@ worker_routine() {
 					echo "name $worker"
 				elif [ "$var" == "state" ]; then
 					notify_state
+				elif [ "$var" == "plugins" ]; then
+					xargs_eval -d: source {} >&- 2>&- <<< $plugins
 				fi
 
 			elif [ "$command" == "unset" ]; then
@@ -306,6 +309,17 @@ worker_routine() {
 					args_of ${set_vars[@]} >/dev/null
 					[[ $tcp_fd ]] && exec 0<&- 1>&-
 					exec $0 "${args[@]}"
+
+				elif [[ "$options" == "plugin "* ]]; then
+					local plug=${options:7}
+					log "accept operate plugin $plug from $who"
+					echo "$who << confirm plugin $plug"
+					source $plug >/dev/null 2>&1
+					if [[ :$plugins: != *:$plug:* ]]; then
+						plugins+=${plugins:+:}$plug
+						log "confirm set plugins=\"$plugins\""
+						set_vars+=("plugins")
+					fi
 
 				elif [[ "$options" == "output "* ]]; then
 					local output=${options:7}

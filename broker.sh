@@ -1,8 +1,9 @@
 #!/bin/bash
 
 broker_main() {
-	declare "$@" >/dev/null 2>&1
+	declare "$@" >&- 2>&-
 	declare set_vars=("$@" broker capacity logfile)
+	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
 	declare broker=${broker-broker}
 	declare capacity=${capacity-65536}
@@ -10,7 +11,7 @@ broker_main() {
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
 
-	log "broker version 2022-07-10 (protocol 0)"
+	log "broker version 2022-07-14 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -298,7 +299,7 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker 2022-07-10"
+					echo "$who << protocol 0 broker 2022-07-14"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
@@ -475,6 +476,8 @@ broker_routine() {
 					echo "name $broker"
 				elif [ "$var" == "workers" ]; then
 					contact_workers ${workers[@]//:/ }
+				elif [ "$var" == "plugins" ]; then
+					xargs_eval -d: source {} >&- 2>&- <<< $plugins
 				fi
 
 			elif [ "$command" == "unset" ]; then
@@ -538,6 +541,17 @@ broker_routine() {
 							printf "$who << confirm $type %s\n" $worker
 							discard_workers $worker
 						done
+					fi
+
+				elif [[ "$options" == "plugin "* ]]; then
+					local plug=${options:7}
+					log "accept operate plugin $plug from $who"
+					echo "$who << confirm plugin $plug"
+					source $plug >/dev/null 2>&1
+					if [[ :$plugins: != *:$plug:* ]]; then
+						plugins+=${plugins:+:}$plug
+						log "confirm set plugins=\"$plugins\""
+						set_vars+=("plugins")
 					fi
 
 				elif [[ "$options" == "output "* ]]; then
