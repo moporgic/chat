@@ -214,10 +214,16 @@ broker_routine() {
 						prefer[$id]=$opt_workers
 						options+="workers=$opt_workers "
 					fi
-					queue+=($id)
-					id_next=$((id+1))
-					echo "$owner << accept request $reply"
-					log "accept request $id {$command} ${options:+with $options}from $owner, queue = ($(omit ${queue[@]}))"
+					if confirm_request $id; then
+						queue+=($id)
+						id_next=$((id+1))
+						echo "$owner << accept request $reply"
+						log "accept request $id {$command} ${options:+with $options}from $owner, queue = ($(omit ${queue[@]}))"
+					else
+						unset own[$id] cmd[$id] tmout[$id] tmdue[$id] prefer[$id]
+						echo "$owner << reject request $reply"
+						log "reject request $id {$command} ${options:+with $options}from $owner due to policy"
+					fi
 				elif [[ -v own[$id] ]]; then
 					echo "$owner << reject request $reply"
 					log "reject request $id {$command} from $owner since id $id has been occupied"
@@ -730,6 +736,11 @@ broker_routine() {
 	return 16
 }
 
+confirm_request() {
+	local id=$1
+	return 0
+}
+
 assign_requests() {
 	declare -A workers_for cost_for
 	local id worker stat pref workers max_cost due
@@ -741,7 +752,7 @@ assign_requests() {
 	cost_for["*"]=$(extract_anchor_cost ${workers_for["*"]})
 
 	for id in ${queue[@]}; do
-		pref=${prefer[$id]:-"*"}
+		pref=$(prefer_workers $id)
 		if ! [[ -v workers_for[$pref] ]]; then
 			workers_for[$pref]=$(filter "$pref" ${workers_for["*"]})
 			cost_for[$pref]=$(extract_anchor_cost ${workers_for[$pref]})
@@ -765,6 +776,11 @@ assign_requests() {
 
 		[[ $id ]] && workers_for[$pref]=
 	done
+}
+
+prefer_workers() {
+	local id=$1
+	echo "${prefer[$id]:-*}"
 }
 
 extract_anchor_cost() {

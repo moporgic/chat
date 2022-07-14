@@ -69,10 +69,15 @@ worker_routine() {
 							unset own[$id] cmd[$id] res[$id]
 						elif [ "$confirm" == "reject" ]; then
 							unset res[$id]
-							echo "$who << accept request $id"
-							log "execute request $id..."
-							execute $id >&${res_fd} {res_fd}>&- &
-							pid[$id]=$!
+							local owner=$who command=${cmd[$id]}
+							if confirm_request $id && execute_request $id; then
+								echo "$owner << accept request $id"
+								log "accept request $id {$command} from $owner, execute $id..."
+							else
+								unset own[$id] cmd[$id] pid[$id]
+								echo "$owner << reject request $id"
+								log "reject request $id {$command} from $owner due to policy/execution"
+							fi
 						fi
 					else
 						log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
@@ -111,18 +116,25 @@ worker_routine() {
 					while [[ -v own[$id] ]]; do id=$((id+1)); done
 					reply="$id {$command}"
 				fi
-				if [[ ! -v own[$id] ]]; then
+				if [[ ! -v own[$id] ]] && [[ ! ${options// } ]]; then
 					own[$id]=$owner
 					cmd[$id]=$command
-					id_next=$((id+1))
-					echo "$owner << accept request $reply"
-					log "accept request $id {$command} from $owner"
-					log "execute request $id..."
-					execute $id >&${res_fd} {res_fd}>&- &
-					pid[$id]=$!
-				else
+					options=
+					if confirm_request $id && execute_request $id; then
+						id_next=$((id+1))
+						echo "$owner << accept request $reply"
+						log "accept request $id {$command} ${options:+with $options}from $owner, execute $id..."
+					else
+						unset own[$id] cmd[$id] pid[$id]
+						echo "$owner << reject request $reply"
+						log "reject request $id {$command} ${options:+with $options}from $owner due to policy/execution"
+					fi
+				elif [[ -v own[$id] ]]; then
 					echo "$owner << reject request $reply"
 					log "reject request $id {$command} from $owner since id $id has been occupied"
+				elif [[ ${options// } ]]; then
+					echo "$owner << reject request $reply"
+					log "reject request $id {$command} from $owner due to unsupported option $(<<<$options xargs -rn1)"
 				fi
 			else
 				echo "$owner << reject request ${id:-{$command\}}"
@@ -474,6 +486,18 @@ worker_routine() {
 	return 16
 }
 
+confirm_request() {
+	local id=$1
+	return 0
+}
+
+execute_request() {
+	local id=$1
+	execute $id >&${res_fd} {res_fd}>&- &
+	pid[$id]=$!
+	return 0
+}
+
 execute() {
 	local id=$1 output code
 	output=$(eval "${cmd[$id]}" 2>&1)
@@ -543,13 +567,7 @@ cmdpidof() {
 
 observe_state() {
 	local state_last=${state[@]}
-	local capacity=${capacity:-$(nproc)}
-	if ! [[ $capacity =~ ^[0-9]+$ ]] && [ -e "$capacity" ]; then
-		if ! [[ $(bash "$capacity" $worker 2>/dev/null) =~ ^([0-9]+)$ ]]; then
-			log "failed to observe capacity with $capacity"
-		fi
-		capacity=${BASH_REMATCH[1]:-0}
-	fi
+	local capacity=$(observe_capacity)
 	local stat="idle"
 	local num_requests=$((${#cmd[@]} - ${#res[@]}))
 	(( ${num_requests} >= ${capacity} )) && stat="busy"
@@ -557,6 +575,15 @@ observe_state() {
 	local state_this=${state[@]}
 	[ "$state_this" != "$state_last" ]
 	return $?
+}
+
+observe_capacity() {
+	local capacity=${capacity:-$(nproc)}
+	if [[ $capacity == *[^0-9]* ]]; then
+		capacity=$(bash "$capacity" $worker 2>&-)
+		[[ ${capacity:-x} == *[^0-9]* ]] && capacity=0
+	fi
+	echo $capacity
 }
 
 notify_state() {
