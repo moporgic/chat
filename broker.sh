@@ -201,6 +201,11 @@ broker_routine() {
 					opt_workers=${BASH_REMATCH[1]}
 					options=${options/${BASH_REMATCH[0]}}
 				fi
+				local opt_preempt=$default_preempt
+				if [[ $options =~ preempt ]]; then
+					opt_preempt=${BASH_REMATCH[0]}
+					options=${options/${BASH_REMATCH[0]}}
+				fi
 				if [[ ! -v own[$id] ]] && [[ ! ${options// } ]]; then
 					own[$id]=$owner
 					cmd[$id]=$command
@@ -214,12 +219,18 @@ broker_routine() {
 						prefer[$id]=$opt_workers
 						options+="workers=$opt_workers "
 					fi
-					if confirm_request $id; then
+					if [[ ! $opt_preempt ]]; then
 						queue+=($id)
+					else
+						queue=($id ${queue[@]})
+						options+="preempt "
+					fi
+					if confirm_request $id; then
 						id_next=$((id+1))
 						echo "$owner << accept request $reply"
 						log "accept request $id {$command} ${options:+with $options}from $owner, queue = ($(omit ${queue[@]}))"
 					else
+						erase_from queue $id
 						unset own[$id] cmd[$id] tmout[$id] tmdue[$id] prefer[$id]
 						echo "$owner << reject request $reply"
 						log "reject request $id {$command} ${options:+with $options}from $owner due to policy"
