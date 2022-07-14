@@ -3,13 +3,14 @@
 broker_main() {
 	declare "$@" >&- 2>&-
 	declare set_vars=("$@" broker capacity logfile)
-	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
 	declare broker=${broker-broker}
 	declare capacity=${capacity-65536}
 	declare default_timeout=${default_timeout}
 	declare default_workers=${default_workers}
 	declare logfile=${logfile}
+	declare plugins=${plugins}
+	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
 	log "broker version 2022-07-14 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"

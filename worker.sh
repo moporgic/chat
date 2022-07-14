@@ -3,13 +3,14 @@
 worker_main() {
 	declare "$@" >&- 2>&-
 	declare set_vars=("$@" broker worker capacity logfile)
-	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
 	declare broker=${broker-broker}
 	declare broker=(${broker//:/ })
 	declare worker=${worker-worker-1}
 	declare capacity=${capacity-$(nproc)}
 	declare logfile=${logfile}
+	declare plugins=${plugins}
+	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
 	log "worker version 2022-07-14 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
