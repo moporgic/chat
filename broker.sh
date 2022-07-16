@@ -71,9 +71,13 @@ broker_routine() {
 			local stat=${BASH_REMATCH[2]}
 			local load=${BASH_REMATCH[3]}
 			echo "$worker << confirm state $stat $load"
-			log "confirm that $worker state $stat $load"
-			[ "${state[$worker]:0:4}" == "hold" ] && stat="hold"
-			state[$worker]=$stat:$load
+			if [[ ${state[$worker]} != hold* ]]; then
+				log "confirm that $worker state $stat $load"
+				state[$worker]=$stat:$load
+			else
+				log "confirm that $worker state $stat $load (hold)"
+				state[$worker]=hold:$load
+			fi
 
 			if [[ ${BASH_REMATCH[4]} ]]; then
 				local assigned=($(filter_keys assign $worker))
