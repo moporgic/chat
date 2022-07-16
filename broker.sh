@@ -151,7 +151,7 @@ broker_routine() {
 						[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
 						echo "$who << accept request $id"
 					done
-					queue=(${ids[@]} ${queue[@]})
+					queue+=(${ids[@]})
 					log "confirm that $who ${confirm}ed $type ${ids[@]}, queue = ($(omit ${queue[@]}))"
 				else
 					log "ignore that $who ${confirm}ed $type $id since no such $type"
