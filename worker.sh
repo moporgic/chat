@@ -181,7 +181,7 @@ worker_routine() {
 					notify_state_with_requests $who
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -rn1 | sort -n)})
 					retain_from ids $(filter_keys own $who)
 					erase_from ids ${!pid[@]}
 					log "accept report responses from $who, responses = ($(omit ${ids[@]}))"
@@ -215,7 +215,7 @@ worker_routine() {
 
 				elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -rn1 | sort -n)})
 					retain_from ids ${!cmd[@]}
 					echo "$who << jobs = (${ids[@]})"
 					for id in ${ids[@]}; do
@@ -229,7 +229,7 @@ worker_routine() {
 
 				elif [[ "$options" =~ ^(request|assign)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -rn1 | sort -n)})
 					retain_from ids $(filter_keys own $who)
 					retain_from ids ${!pid[@]}
 					echo "$who << requests = (${ids[@]})"
@@ -240,7 +240,7 @@ worker_routine() {
 
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -rn1 | sort -n)})
 					retain_from ids $(filter_keys own $who)
 					erase_from ids ${!pid[@]}
 					echo "$who << responses = (${ids[@]})"

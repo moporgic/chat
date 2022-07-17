@@ -354,7 +354,7 @@ broker_routine() {
 
 				elif [[ "$options" =~ ^(worker)s?(.*)$ ]]; then
 					local workers=() worker
-					workers=(${BASH_REMATCH[2]:-$(<<< ${!state[@]} xargs -r printf "%s\n" | sort)})
+					workers=(${BASH_REMATCH[2]:-$(<<< ${!state[@]} xargs -rn1 | sort)})
 					retain_from workers ${!state[@]}
 					echo "$who << workers = (${workers[@]})"
 					for worker in ${workers[@]}; do
@@ -365,7 +365,7 @@ broker_routine() {
 
 				elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -rn1 | sort -n)})
 					retain_from ids ${!cmd[@]}
 					echo "$who << jobs = (${ids[@]})"
 					for id in ${ids[@]}; do
@@ -383,7 +383,7 @@ broker_routine() {
 
 				elif [[ "$options" =~ ^(request)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -r printf "%d\n" | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -rn1 | sort -n)})
 					retain_from ids $(filter_keys own $who)
 					erase_from ids ${!res[@]}
 					echo "$who << requests = (${ids[@]})"
@@ -400,7 +400,7 @@ broker_routine() {
 
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -r printf "%d\n" | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -rn1 | sort -n)})
 					retain_from ids $(filter_keys own $who)
 					retain_from ids ${!res[@]}
 					echo "$who << responses = (${ids[@]})"
