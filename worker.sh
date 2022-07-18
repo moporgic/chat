@@ -189,7 +189,7 @@ worker_routine() {
 					done
 				else
 					log "ignore $command $options from $who"
-				fi
+				fi &
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then

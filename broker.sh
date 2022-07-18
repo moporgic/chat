@@ -60,7 +60,7 @@ broker_routine() {
 	local regex_terminate="^(\S+) >> terminate (\S+)$"
 	local regex_confirm="^(\S+) >> (accept|reject|confirm) (request|response|terminate) (\S+)$"
 	local regex_worker_state="^(\S+) >> state (idle|busy) (\S+/\S+)( \((.*)\))?$"
-	local regex_others="^(\S+) >> (query|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
+	local regex_others="^(\S+) >> (query|report|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
 	local regex_chat_system="^(#|%) (.+)$"
 
 	local message
@@ -413,6 +413,20 @@ broker_routine() {
 					<<< $envinfo xargs -r -d'\n' -L1 echo "$who << #"
 					log "accept query envinfo from $who, envinfo = ($envitem)"
 
+				else
+					log "ignore $command $options from $who"
+				fi &
+
+			elif [ "$command" == "report" ]; then
+				if [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
+					local ids=() id
+					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -rn1 | sort -n)})
+					retain_from ids $(filter_keys own $who)
+					retain_from ids ${!res[@]}
+					log "accept report responses from $who, responses = ($(omit ${ids[@]}))"
+					for id in ${ids[@]}; do
+						echo "$who << response $id ${res[$id]%%:*} {${res[$id]#*:}}"
+					done
 				else
 					log "ignore $command $options from $who"
 				fi &
