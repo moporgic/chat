@@ -117,10 +117,9 @@ worker_routine() {
 					while [[ -v own[$id] ]]; do id=$((id+1)); done
 					reply="$id {$command}"
 				fi
-				if [[ ! -v own[$id] ]] && [[ ! ${options// } ]]; then
+				if [[ ! -v own[$id] ]] && [[ ! $options ]]; then
 					own[$id]=$owner
 					cmd[$id]=$command
-					options=
 					if confirm_request $id && execute_request $id; then
 						id_next=$((id+1))
 						echo "$owner << accept request $reply"
@@ -133,9 +132,9 @@ worker_routine() {
 				elif [[ -v own[$id] ]]; then
 					echo "$owner << reject request $reply"
 					log "reject request $id {$command} from $owner since id $id has been occupied"
-				elif [[ ${options// } ]]; then
+				elif [[ $options ]]; then
 					echo "$owner << reject request $reply"
-					log "reject request $id {$command} from $owner due to unsupported option $(<<<$options xargs -rn1)"
+					log "reject request $id {$command} from $owner due to unsupported option $options"
 				fi
 			else
 				echo "$owner << reject request ${id:-{$command\}}"
@@ -490,6 +489,27 @@ worker_routine() {
 confirm_request() {
 	local id=$1
 	return 0
+}
+
+extract_options() {
+	opts=()
+	local labels="$@" opt val
+	for opt in $labels; do
+		val="default_$opt"
+		[[ ${!val} ]] && opts[$opt]=${!val}
+	done
+	[[ ! $options ]] && return 0
+	options=" $options "
+	local regex_option=" (${labels// /|})(=[^ ]*)? "
+	while [[ $options =~ $regex_option ]]; do
+		options=${options/"$BASH_REMATCH"/ }
+		opt=${BASH_REMATCH[1]}
+		val=${BASH_REMATCH[2]}
+		opts[$opt]=${val:1}
+	done
+	[[ ! $options ]] && return 0
+	options=$(<<< $options xargs)
+	[[ ! $options ]]
 }
 
 execute_request() {

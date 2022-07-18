@@ -196,39 +196,29 @@ broker_routine() {
 					while [[ -v own[$id] ]]; do id=$((id+1)); done
 					reply="$id {$command}"
 				fi
-				local opt_timeout=$default_timeout
-				if [[ $options =~ timeout=([^ ]*) ]]; then
-					opt_timeout=${BASH_REMATCH[1]}
-					options=${options/${BASH_REMATCH[0]}}
-				fi
-				local opt_workers=$default_workers
-				if [[ $options =~ workers?=([^ ]*) ]]; then
-					opt_workers=${BASH_REMATCH[1]}
-					options=${options/${BASH_REMATCH[0]}}
-				fi
-				local opt_preempt=$default_preempt
-				if [[ $options =~ preempt ]]; then
-					opt_preempt=${BASH_REMATCH[0]}
-					options=${options/${BASH_REMATCH[0]}}
-				fi
-				if [[ ! -v own[$id] ]] && [[ ! ${options// } ]]; then
+				local -A opts=()
+				extract_options timeout workers enqueue
+
+				if [[ ! -v own[$id] ]] && [[ ! $options ]]; then
 					own[$id]=$owner
 					cmd[$id]=$command
-					options=
-					if [[ $opt_timeout == [1-9]* ]]; then
-						tmout[$id]=$(millisec $opt_timeout)
+					queue+=($id)
+					if [[ ${opts[enqueue]} == preempt ]]; then
+						local ids=() it=$id
+						for id in ${queue[@]}; do
+							[[ ${own[$id]} == $owner ]] && ids+=($it) it=$id || ids+=($id)
+						done
+						queue=(${ids[@]})
+						options+="enqueue=${opts[enqueue]} "
+					fi
+					if [[ ${opts[timeout]} == [1-9]* ]]; then
+						tmout[$id]=$(millisec ${opts[timeout]})
 						tmdue[$id]=$(($(date +%s%3N)+tmout[$id]))
-						options+="timeout=$opt_timeout "
+						options+="timeout=${opts[timeout]} "
 					fi
-					if [[ $opt_workers ]]; then
-						prefer[$id]=$opt_workers
-						options+="workers=$opt_workers "
-					fi
-					if [[ ! $opt_preempt ]]; then
-						queue+=($id)
-					else
-						queue=($id ${queue[@]})
-						options+="preempt "
+					if [[ ${opts[workers]} ]]; then
+						prefer[$id]=${opts[workers]}
+						options+="workers=${opts[workers]} "
 					fi
 					if confirm_request $id; then
 						id_next=$((id+1))
@@ -243,9 +233,9 @@ broker_routine() {
 				elif [[ -v own[$id] ]]; then
 					echo "$owner << reject request $reply"
 					log "reject request $id {$command} from $owner since id $id has been occupied"
-				elif [[ ${options// } ]]; then
+				elif [[ $options ]]; then
 					echo "$owner << reject request $reply"
-					log "reject request $id {$command} from $owner due to unsupported option $(<<<$options xargs -rn1)"
+					log "reject request $id {$command} from $owner due to unsupported option $options"
 				fi
 			else
 				echo "$owner << reject request ${id:-{$command\}}"
@@ -755,6 +745,27 @@ broker_routine() {
 confirm_request() {
 	local id=$1
 	return 0
+}
+
+extract_options() {
+	opts=()
+	local labels="$@" opt val
+	for opt in $labels; do
+		val="default_$opt"
+		[[ ${!val} ]] && opts[$opt]=${!val}
+	done
+	[[ ! $options ]] && return 0
+	options=" $options "
+	local regex_option=" (${labels// /|})(=[^ ]*)? "
+	while [[ $options =~ $regex_option ]]; do
+		options=${options/"$BASH_REMATCH"/ }
+		opt=${BASH_REMATCH[1]}
+		val=${BASH_REMATCH[2]}
+		opts[$opt]=${val:1}
+	done
+	[[ ! $options ]] && return 0
+	options=$(<<< $options xargs)
+	[[ ! $options ]]
 }
 
 assign_requests() {
