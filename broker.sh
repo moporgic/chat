@@ -12,7 +12,7 @@ broker_main() {
 	declare plugins=${plugins}
 	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
-	log "broker version 2022-07-14 (protocol 0)"
+	log "broker version 2022-07-18 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -24,6 +24,7 @@ broker_main() {
 	declare -A tmout # [id]=timeout
 	declare -A tmdue # [id]=due
 	declare -A hdue # [id]=due
+	declare -A stdout # [id]=output
 	declare -A state # [worker]=stat:load
 	declare -A news # [type-who]=subscribe
 	declare -A notify # [type]=subscriber...
@@ -142,12 +143,13 @@ broker_routine() {
 				fi
 				if [[ ${ids[@]} ]] && [ "$confirm" == "accept" ]; then
 					for id in ${ids[@]}; do
-						unset res[$id] cmd[$id] own[$id] tmout[$id] prefer[$id]
+						unset res[$id] cmd[$id] own[$id] tmout[$id] prefer[$id] stdout[$id]
 					done
 					log "confirm that $who ${confirm}ed $type ${ids[@]}"
 				elif [[ ${ids[@]} ]] && [ "$confirm" == "reject" ]; then
 					for id in ${ids[@]}; do
 						unset res[$id]
+						[[ -v stdout[$id] ]] && stdout[$id]=
 						[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
 						echo "$who << accept request $id"
 					done
@@ -197,7 +199,7 @@ broker_routine() {
 					reply="$id {$command}"
 				fi
 				local -A opts=()
-				extract_options timeout workers enqueue
+				extract_options timeout workers enqueue output
 
 				if [[ ! -v own[$id] ]] && [[ ! $options ]]; then
 					own[$id]=$owner
@@ -220,13 +222,17 @@ broker_routine() {
 						prefer[$id]=${opts[workers]}
 						options+="workers=${opts[workers]} "
 					fi
+					if [[ -v opts[output] ]]; then
+						stdout[$id]=
+						options+="output "
+					fi
 					if confirm_request $id; then
 						id_next=$((id+1))
 						echo "$owner << accept request $reply"
 						log "accept request $id {$command} ${options:+with $options}from $owner, queue = ($(omit ${queue[@]}))"
 					else
 						erase_from queue $id
-						unset own[$id] cmd[$id] tmout[$id] tmdue[$id] prefer[$id]
+						unset own[$id] cmd[$id] tmout[$id] tmdue[$id] prefer[$id] stdout[$id]
 						echo "$owner << reject request $reply"
 						log "reject request $id {$command} ${options:+with $options}from $owner due to policy"
 					fi
@@ -250,23 +256,27 @@ broker_routine() {
 			local code=${BASH_REMATCH[3]}
 			local output=${BASH_REMATCH[4]}
 
-			if [ "${assign[$id]}" == "$worker" ]; then
-				unset assign[$id] tmdue[$id] hdue[$id]
-				echo "$worker << accept response $id"
-				if [[ -v cmd[$id] ]]; then
-					res[$id]=$code:$output
-					echo "${own[$id]} << response $id $code {$output}"
-					log "accept response $id $code {$output} from $worker and forward it to ${own[$id]}"
+			if [[ -v cmd[$id] ]] && [ "${assign[$id]}" == "$worker" ]; then
+				if [ $code != output ]; then
+					res[$id]=$code:${stdout[$id]}$output
+					unset assign[$id] tmdue[$id] hdue[$id]
+					echo "$worker << accept response $id"
 				else
-					log "accept response $id $code {$output} from $worker but no such request"
+					stdout[$id]+=$output\\n
+					echo "$worker << confirm response $id"
 				fi
+				echo "${own[$id]} << response $id $code {$output}"
+				log "accept response $id $code {$output} from $worker and forward it to ${own[$id]}"
+
+			elif [[ ! -v cmd[$id] ]]; then
+				echo "$worker << accept response $id"
+				log "ignore response $id $code {$output} from $worker since no such request"
+			elif [[ -v assign[$id] ]]; then
+				echo "$worker << accept response $id"
+				log "ignore response $id $code {$output} from $worker since it is owned by ${assign[$id]}"
 			else
 				echo "$worker << accept response $id"
-				if [ "${assign[$id]}" ]; then
-					log "ignore response $id $code {$output} from $worker since it is owned by ${assign[$id]}"
-				else
-					log "ignore response $id $code {$output} from $worker since no such assignment"
-				fi
+				log "ignore response $id $code {$output} from $worker since no such assignment"
 			fi
 
 		elif [[ $message =~ $regex_terminate ]]; then
@@ -290,7 +300,7 @@ broker_routine() {
 						log "forward terminate $id to ${assign[$id]}"
 						unset assign[$id] hdue[$id]
 					fi
-					unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id]
+					unset cmd[$id] own[$id] tmdue[$id] tmout[$id] prefer[$id] stdout[$id]
 				done
 				erase_from queue ${ids[@]}
 				log "accept terminate ${ids[@]} from $who, queue = ($(omit ${queue[@]}))"
@@ -311,7 +321,7 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker 2022-07-14"
+					echo "$who << protocol 0 broker 2022-07-18"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
@@ -624,7 +634,7 @@ broker_routine() {
 					if ! [ "${keep_unowned_tasks}" ]; then
 						local id
 						for id in $(filter_keys own $who); do
-							unset cmd[$id] own[$id] tmout[$id] prefer[$id]
+							unset cmd[$id] own[$id] tmout[$id] prefer[$id] stdout[$id]
 							if [[ -v res[$id] ]]; then
 								unset res[$id]
 								log "discard request $id and response $id"
@@ -784,7 +794,7 @@ extract_options() {
 
 assign_requests() {
 	declare -A workers_for cost_for
-	local id worker stat pref workers max_cost due
+	local id request with worker stat pref workers max_cost due
 
 	workers_for["*"]=$(for worker in ${!state[@]}; do
 		stat=${state[$worker]%/*}
@@ -793,6 +803,11 @@ assign_requests() {
 	cost_for["*"]=$(extract_anchor_cost ${workers_for["*"]})
 
 	for id in ${queue[@]}; do
+		request="$id {${cmd[$id]}}"
+		with=
+		[[ -v stdout[$id] ]] && with+=" output"
+		request+=${with:+ with}${with}
+
 		pref=$(prefer_workers $id)
 		if ! [[ -v workers_for[$pref] ]]; then
 			workers_for[$pref]=$(filter "$pref" ${workers_for["*"]})
@@ -806,7 +821,7 @@ assign_requests() {
 			(( ${stat:5} > $max_cost )) && break
 			[ ${stat:0:4} != "idle" ] && continue
 
-			echo "$worker << request $id {${cmd[$id]}}"
+			echo "$worker << request $request"
 			log "assign request $id to $worker"
 			state[$worker]="hold":${state[$worker]:5}
 			assign[$id]=$worker

@@ -12,7 +12,7 @@ worker_main() {
 	declare plugins=${plugins}
 	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
-	log "worker version 2022-07-14 (protocol 0)"
+	log "worker version 2022-07-18 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -20,6 +20,7 @@ worker_main() {
 	declare -A cmd # [id]=command
 	declare -A res # [id]=code:output
 	declare -A pid # [id]=PID
+	declare -A stdout # [id]=output
 
 	declare id_next
 	declare io_count
@@ -63,26 +64,31 @@ worker_routine() {
 			elif [ "$what" == "response" ]; then
 				local id=$option
 
-				if [[ -v res[$id] ]] && [[ ! -v pid[$id] ]]; then
-					if [ "${own[$id]}" == "$who" ]; then
+				if [[ -v res[$id] ]] && [ "${own[$id]}" == "$who" ]; then
+					if [ "$confirm" == "accept" ]; then
 						log "confirm that $who ${confirm}ed response $id"
-						if [ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]; then
-							unset own[$id] cmd[$id] res[$id]
-						elif [ "$confirm" == "reject" ]; then
-							unset res[$id]
-							local owner=$who command=${cmd[$id]}
-							if confirm_request $id && execute_request $id; then
-								echo "$owner << accept request $id"
-								log "accept request $id {$command} from $owner, execute $id..."
-							else
-								unset own[$id] cmd[$id] pid[$id]
-								echo "$owner << reject request $id"
-								log "reject request $id {$command} from $owner due to policy/execution"
-							fi
+						unset own[$id] cmd[$id] res[$id] stdout[$id]
+					elif [ "$confirm" == "confirm" ] && [[ -v stdout[$id] ]]; then
+						log "confirm that $who ${confirm}ed response $id output"
+					elif [ "$confirm" == "reject" ]; then
+						log "confirm that $who ${confirm}ed response $id"
+						unset res[$id]
+						local owner=$who command=${cmd[$id]}
+						local options=
+						[[ -v stdout[$id] ]] && options+="output "
+						if confirm_request $id && execute_request $id; then
+							echo "$owner << accept request $id"
+							log "accept request $id {$command} ${options:+with $options}from $owner, execute $id..."
+						else
+							unset own[$id] cmd[$id] pid[$id] stdout[$id]
+							echo "$owner << reject request $id"
+							log "reject request $id {$command} ${options:+with $options}from $owner due to policy/execution"
 						fi
-					else
-						log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
 					fi
+				elif [[ -v stdout[$id] ]] && [ "${own[$id]}" == "$who" ]; then
+					log "confirm that $who ${confirm}ed response $id output"
+				elif [ "${own[$id]:-$who}" != "$who" ]; then
+					log "ignore that $who ${confirm}ed response $id since it is owned by ${own[$id]}"
 				else
 					log "ignore that $who ${confirm}ed response $id since no such response"
 				fi
@@ -117,15 +123,22 @@ worker_routine() {
 					while [[ -v own[$id] ]]; do id=$((id+1)); done
 					reply="$id {$command}"
 				fi
+				local -A opts=()
+				extract_options output
+
 				if [[ ! -v own[$id] ]] && [[ ! $options ]]; then
 					own[$id]=$owner
 					cmd[$id]=$command
+					if [[ -v opts[output] ]]; then
+						stdout[$id]=
+						options+="output "
+					fi
 					if confirm_request $id && execute_request $id; then
 						id_next=$((id+1))
 						echo "$owner << accept request $reply"
 						log "accept request $id {$command} ${options:+with $options}from $owner, execute $id..."
 					else
-						unset own[$id] cmd[$id] pid[$id]
+						unset own[$id] cmd[$id] pid[$id] stdout[$id]
 						echo "$owner << reject request $reply"
 						log "reject request $id {$command} ${options:+with $options}from $owner due to policy/execution"
 					fi
@@ -155,7 +168,7 @@ worker_routine() {
 					if kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null; then
 						log "request $id has been terminated successfully"
 					fi
-					unset own[$id] cmd[$id] res[$id] pid[$id]
+					unset own[$id] cmd[$id] res[$id] pid[$id] stdout[$id]
 				else
 					echo "$who << reject terminate $id"
 					log "reject terminate $id from $who since it is owned by ${own[$id]}"
@@ -193,7 +206,7 @@ worker_routine() {
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 worker 2022-07-14"
+					echo "$who << protocol 0 worker 2022-07-18"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
@@ -470,10 +483,14 @@ worker_routine() {
 		local id code output
 		while (( ${#cmd[@]} )) && fetch_response; do
 			if [[ -v cmd[$id] ]] && [[ -v own[$id] ]]; then
-				res[$id]=$code:$output
+				if [ $code != output ]; then
+					res[$id]=$code:${stdout[$id]}$output
+					unset pid[$id]
+				else
+					stdout[$id]+=$output\\n
+				fi
 				log "complete response $id $code {$output} and forward it to ${own[$id]}"
 				echo "${own[$id]} << response $id $code {$output}"
-				unset pid[$id]
 			else
 				log "complete orphan response $id $code {$output}"
 			fi
@@ -513,18 +530,35 @@ extract_options() {
 }
 
 execute_request() {
-	local id=$1
-	execute $id >&${res_fd} {res_fd}>&- &
+	local id=$1 output=store
+	[[ -v stdout[$id] ]] && output=flush stdout[$id]=
+	execute $id $output >&${res_fd} {res_fd}>&- &
 	pid[$id]=$!
 	return 0
 }
 
 execute() {
-	local id=$1 output code
-	output=$(eval "${cmd[$id]}" 2>&1)
-	code=$?
-	output=$(echo -n "$output" | format_output)
-	echo "response $id $code {$output}"
+	local id=$1 output=${2:-store} code
+	if [[ $output == store ]]; then
+		output=$(eval "${cmd[$id]}" 2>&1)
+		code=$?
+		output=$(echo -n "$output" | format_output)
+		echo "response $id $code {$output}"
+	elif [[ $output == flush ]]; then
+		shopt -s lastpipe
+		eval "${cmd[$id]}" 2>&1 | while IFS= read -r output; do
+			output=$(echo -n "$output" | format_output)
+			echo "response $id output {$output}"
+		done
+		code=${PIPESTATUS[0]}
+		if [[ $output ]]; then
+			output=$(echo -n "$output" | format_output)
+			echo "response $id output {$output}"
+		fi
+		echo "response $id $code {}"
+	else
+		echo "response $id -1 {}"
+	fi
 }
 
 format_output() {
@@ -557,7 +591,7 @@ discard_owned_assets() {
 			log "discard and terminate request $id"
 			kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null
 		fi
-		unset own[$id] cmd[$id] res[$id] pid[$id]
+		unset own[$id] cmd[$id] res[$id] pid[$id] stdout[$id]
 	done
 }
 
