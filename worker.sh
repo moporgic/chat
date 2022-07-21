@@ -12,7 +12,7 @@ worker_main() {
 	declare plugins=${plugins}
 	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
-	log "worker version 2022-07-18 (protocol 0)"
+	log "worker version 2022-07-21 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -20,6 +20,7 @@ worker_main() {
 	declare -A cmd # [id]=command
 	declare -A res # [id]=code:output
 	declare -A pid # [id]=PID
+	declare -A stdin # [id]=FD
 	declare -A stdout # [id]=output
 
 	declare id_next
@@ -43,11 +44,12 @@ worker_routine() {
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
 
-	local regex_request="^(\S+) >> request ((([0-9]+) )?\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$"
+	local regex_request="^(\S+) >> request (([0-9]+) )?(\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$"
 	local regex_confirm="^(\S+) >> (confirm|accept|reject) (state|response|protocol) (.+)$"
 	local regex_terminate="^(\S+) >> terminate (\S+)$"
 	local regex_others="^(\S+) >> (operate|shell|set|unset|use|query|report) (.+)$"
 	local regex_chat_system="^(#|%) (.+)$"
+	local regex_request_input="^input (\{(.*)\}|(.+))$"
 
 	local message
 	while input message; do
@@ -67,7 +69,7 @@ worker_routine() {
 				if [[ -v res[$id] ]] && [ "${own[$id]}" == "$who" ]; then
 					if [ "$confirm" == "accept" ]; then
 						log "confirm that $who ${confirm}ed response $id"
-						unset own[$id] cmd[$id] res[$id] stdout[$id]
+						unset own[$id] cmd[$id] res[$id] stdin[$id] stdout[$id]
 					elif [ "$confirm" == "confirm" ] && [[ -v stdout[$id] ]]; then
 						log "confirm that $who ${confirm}ed response $id output"
 					elif [ "$confirm" == "reject" ]; then
@@ -75,12 +77,13 @@ worker_routine() {
 						unset res[$id]
 						local owner=$who command=${cmd[$id]}
 						local options=
+						[[ -v stdin[$id] ]] && options+="input "
 						[[ -v stdout[$id] ]] && options+="output "
 						if confirm_request $id && execute_request $id; then
 							echo "$owner << accept request $id"
 							log "accept request $id {$command} ${options:+with $options}from $owner, execute $id..."
 						else
-							unset own[$id] cmd[$id] pid[$id] stdout[$id]
+							unset own[$id] cmd[$id] pid[$id] stdin[$id] stdout[$id]
 							echo "$owner << reject request $id"
 							log "reject request $id {$command} ${options:+with $options}from $owner due to policy/execution"
 						fi
@@ -110,45 +113,64 @@ worker_routine() {
 			fi
 
 		elif [[ $message =~ $regex_request ]]; then
-			# ^(\S+) >> request ((([0-9]+) )?\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$
+			# ^(\S+) >> request (([0-9]+) )?(\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$
 			local owner=${BASH_REMATCH[1]}
-			local id=${BASH_REMATCH[4]}
+			local id=${BASH_REMATCH[3]}
 			local command=${BASH_REMATCH[5]:-${BASH_REMATCH[9]}}
 			local options=${BASH_REMATCH[8]}
 
-			if [ "$state" == "idle" ] && ( [[ ! $request_whitelist ]] || contains broker $owner ); then
-				local reply="$id"
+			local -A opts=()
+			extract_options input output
+
+			if [ "$state" == "idle" ] && [[ ! -v own[$id] ]] && [[ ! $options ]] && \
+					( [[ ! $request_whitelist ]] || contains broker $owner ); then
+				local request="$id"
 				if [[ ! $id ]]; then
 					id=${id_next:-1}
 					while [[ -v own[$id] ]]; do id=$((id+1)); done
-					reply="$id {$command}"
+					request="$id {$command}"
 				fi
-				local -A opts=()
-				extract_options output
+				own[$id]=$owner
+				cmd[$id]=$command
+				if [[ -v opts[input] ]]; then
+					stdin[$id]=
+					options+="input "
+				fi
+				if [[ -v opts[output] ]]; then
+					stdout[$id]=
+					options+="output "
+				fi
+				if confirm_request $id && execute_request $id; then
+					id_next=$((id+1))
+					echo "$owner << accept request $request"
+					log "accept request $id {$command} ${options:+with $options}from $owner, execute $id..."
+				else
+					unset own[$id] cmd[$id] pid[$id] stdin[$id] stdout[$id]
+					echo "$owner << reject request $request"
+					log "reject request $id {$command} ${options:+with $options}from $owner due to policy/execution"
+				fi
 
-				if [[ ! -v own[$id] ]] && [[ ! $options ]]; then
-					own[$id]=$owner
-					cmd[$id]=$command
-					if [[ -v opts[output] ]]; then
-						stdout[$id]=
-						options+="output "
-					fi
-					if confirm_request $id && execute_request $id; then
-						id_next=$((id+1))
-						echo "$owner << accept request $reply"
-						log "accept request $id {$command} ${options:+with $options}from $owner, execute $id..."
-					else
-						unset own[$id] cmd[$id] pid[$id] stdout[$id]
-						echo "$owner << reject request $reply"
-						log "reject request $id {$command} ${options:+with $options}from $owner due to policy/execution"
-					fi
-				elif [[ -v own[$id] ]]; then
-					echo "$owner << reject request $reply"
-					log "reject request $id {$command} from $owner since id $id has been occupied"
-				elif [[ $options ]]; then
-					echo "$owner << reject request $reply"
-					log "reject request $id {$command} from $owner due to unsupported option $options"
+			elif [[ -v stdin[$id] ]] && [[ $command =~ $regex_request_input ]]; then
+				# ^input (\{(.*)\}|(.+))$
+				local input=${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}
+				if [[ ${own[$id]} == $owner ]] && [[ -v pid[$id] ]]; then
+					echo "$input" >&${stdin[$id]}
+					echo "$owner << confirm request $id"
+					log "accept request $id input {$input} from $owner, input into $id"
+				elif [[ ${own[$id]} != $owner ]]; then
+					echo "$owner << reject request $id"
+					log "reject request $id input {$input} from $owner since it is owned by ${own[$id]}"
+				else
+					echo "$owner << reject request $id"
+					log "reject request $id input {$input} from $owner since it is not running"
 				fi
+
+			elif [[ -v own[$id] ]]; then
+				echo "$owner << reject request $id"
+				log "reject request $id {$command} from $owner since id $id has been occupied"
+			elif [[ $options ]]; then
+				echo "$owner << reject request ${id:-{$command\}}"
+				log "reject request ${id:+$id }{$command} from $owner due to unsupported option $options"
 			else
 				echo "$owner << reject request ${id:-{$command\}}"
 				local reason="state = ${state[@]:-init}"
@@ -168,7 +190,8 @@ worker_routine() {
 					if kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null; then
 						log "request $id has been terminated successfully"
 					fi
-					unset own[$id] cmd[$id] res[$id] pid[$id] stdout[$id]
+					[[ -v stdin[$id] ]] && exec {stdin[$id]}>&-
+					unset own[$id] cmd[$id] res[$id] pid[$id] stdin[$id] stdout[$id]
 				else
 					echo "$who << reject terminate $id"
 					log "reject terminate $id from $who since it is owned by ${own[$id]}"
@@ -206,7 +229,7 @@ worker_routine() {
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 worker 2022-07-18"
+					echo "$who << protocol 0 worker 2022-07-21"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
@@ -485,6 +508,7 @@ worker_routine() {
 			if [[ -v cmd[$id] ]] && [[ -v own[$id] ]]; then
 				if [ $code != output ]; then
 					res[$id]=$code:${stdout[$id]}$output
+					[[ -v stdin[$id] ]] && exec {stdin[$id]}>&-
 					unset pid[$id]
 				else
 					stdout[$id]+=$output\\n
@@ -532,9 +556,17 @@ extract_options() {
 execute_request() {
 	local id=$1 output=store
 	[[ -v stdout[$id] ]] && output=flush stdout[$id]=
-	execute $id $output >&${res_fd} {res_fd}>&- &
-	pid[$id]=$!
-	return 0
+	if [[ ! -v stdin[$id] ]]; then
+		execute $id $output >&${res_fd} {res_fd}>&- &
+		pid[$id]=$!
+		return 0
+	elif exec {stdin[$id]}<> <(:); then
+		execute $id $output <&${stdin[$id]} >&${res_fd} {stdin[$id]}<&- {res_fd}>&- &
+		pid[$id]=$!
+		return 0
+	else
+		return 1
+	fi
 }
 
 execute() {
@@ -591,7 +623,8 @@ discard_owned_assets() {
 			log "discard and terminate request $id"
 			kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null
 		fi
-		unset own[$id] cmd[$id] res[$id] pid[$id] stdout[$id]
+		[[ -v stdin[$id] ]] && exec {stdin[$id]}>&-
+		unset own[$id] cmd[$id] res[$id] pid[$id] stdin[$id] stdout[$id]
 	done
 }
 
