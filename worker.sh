@@ -477,7 +477,7 @@ worker_routine() {
 			jobs >/dev/null 2>&1
 
 		else
-			log "ignore message: $message"
+			handle_extended_input "$message" || log "ignore message: $message"
 		fi
 
 		local id code output
@@ -659,6 +659,11 @@ notify_state_with_requests() {
 
 refresh_state() {
 	[[ $state ]] && observe_state && notify_state
+}
+
+handle_extended_input() {
+	local message=$1
+	return 1
 }
 
 app() {

@@ -752,7 +752,7 @@ broker_routine() {
 			jobs >/dev/null 2>&1
 
 		else
-			log "ignore message: $message"
+			handle_extended_input "$message" || log "ignore message: $message"
 		fi
 
 		if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
@@ -971,6 +971,11 @@ unhold_worker_state() {
 		(( load < size )) && stat="idle" || stat="busy"
 		state[$worker]=$stat:$load/$size
 	fi
+}
+
+handle_extended_input() {
+	local message=$1
+	return 1
 }
 
 millisec() {
