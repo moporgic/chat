@@ -12,7 +12,7 @@ broker_main() {
 	declare plugins=${plugins}
 	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
-	log "broker version 2022-07-21 (protocol 0)"
+	log "broker version 2022-07-23 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -27,6 +27,7 @@ broker_main() {
 	declare -A stdin # [id]=
 	declare -A stdout # [id]=output
 	declare -A state # [worker]=stat:load
+	declare -A hold # [worker]=hold
 	declare -A news # [type-who]=subscribe
 	declare -A notify # [type]=subscriber...
 	declare -a queue # id...
@@ -69,25 +70,31 @@ broker_routine() {
 	local message
 	while input message; do
 		if [[ $message =~ $regex_worker_state ]]; then
-			# ^(\S+) >> state (idle|busy) (\S+/\S+)( \((.*)\))?$
+			# ^(\S+) >> state (idle|busy) (\S+/\S+)( \(.*\))?$
 			local worker=${BASH_REMATCH[1]}
 			local stat=${BASH_REMATCH[2]}
 			local load=${BASH_REMATCH[3]}
+			local owned=${BASH_REMATCH[4]}
 			echo "$worker << confirm state $stat $load"
-			if [[ ${state[$worker]} != hold* ]]; then
+
+			if (( ! hold[$worker] )); then
 				log "confirm that $worker state $stat $load"
 				state[$worker]=$stat:$load
 			else
-				log "confirm that $worker state $stat $load (hold)"
-				state[$worker]=hold:$load
+				local load=(${load/\// })
+				local size=${load[1]}
+				load=$((load+hold[$worker]))
+				(( load < size )) && stat="idle" || stat="busy"
+				log "confirm that $worker state $stat $load/$size (${hold[$worker]} hold)"
+				state[$worker]=$stat:$load/$size
 			fi
 
-			if [[ ${BASH_REMATCH[4]} ]]; then
-				local assigned=($(filter_keys assign $worker))
-				erase_from assigned ${BASH_REMATCH[5]} ${!hdue[@]}
-				if [[ ${assigned[@]} ]]; then
-					queue=(${assigned[@]} ${queue[@]})
-					log "confirm that $worker disowned request ${assigned[@]}, queue = ($(omit ${queue[@]}))"
+			if [[ $owned ]]; then
+				local ids=($(filter_keys assign $worker))
+				erase_from ids ${owned:2:-1} ${!hdue[@]}
+				if [[ ${ids[@]} ]]; then
+					queue=(${ids[@]} ${queue[@]})
+					log "confirm that $worker disowned request ${ids[@]}, queue = ($(omit ${queue[@]}))"
 				fi
 			fi
 
@@ -107,7 +114,7 @@ broker_routine() {
 					retain_from ids ${!hdue[@]}
 				fi
 				if [[ ${ids[@]} ]] && [ "$confirm" == "accept" ]; then
-					unhold_worker_state $who ${#ids[@]}
+					hold[$who]=$((hold[$who]-${#ids[@]}))
 					log "confirm that $who ${confirm}ed $type ${ids[@]}"
 					if [[ ${notify[idle]} ]]; then
 						local stat
@@ -128,7 +135,7 @@ broker_routine() {
 					for id in ${ids[@]}; do
 						unset hdue[$id] assign[$id]
 					done
-					unhold_worker_state $who 0
+					adjust_worker_state $who -${#ids[@]}
 					queue=(${ids[@]} ${queue[@]})
 					log "confirm that $who ${confirm}ed $type ${ids[@]}, queue = ($(omit ${queue[@]}))"
 				elif [[ -v stdin[$id] ]] && [ "$confirm" == "confirm" ]; then
@@ -319,7 +326,7 @@ broker_routine() {
 				for id in ${ids[@]}; do
 					echo "$who << accept terminate $id"
 					if [[ -v assign[$id] ]]; then
-						[[ -v hdue[$id] ]] && unhold_worker_state ${assign[$id]}
+						[[ -v hdue[$id] ]] && adjust_worker_state ${assign[$id]} -1
 						echo "${assign[$id]} << terminate $id"
 						log "forward terminate $id to ${assign[$id]}"
 						unset assign[$id] hdue[$id]
@@ -345,7 +352,7 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker 2022-07-21"
+					echo "$who << protocol 0 broker 2022-07-23"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
@@ -668,7 +675,7 @@ broker_routine() {
 							if [[ -v assign[$id] ]]; then
 								echo "${assign[$id]} << terminate $id"
 								log "terminate assigned request $id on ${assign[$id]}"
-								[[ -v hdue[$id] ]] && unhold_worker_state ${assign[$id]}
+								[[ -v hdue[$id] ]] && adjust_worker_state ${assign[$id]} -1
 								unset assign[$id] tmdue[$id] hdue[$id]
 							else
 								erase_from queue $id
@@ -691,7 +698,8 @@ broker_routine() {
 						log "$who renamed as $new"
 						if [[ -v state[$who] ]]; then
 							state[$new]=${state[$who]}
-							unset state[$who]
+							hold[$new]=${hold[$who]}
+							unset state[$who] hold[$who]
 							log "transfer the worker state to $new"
 							local id
 							for id in $(filter_keys assign $who); do
@@ -751,7 +759,7 @@ broker_routine() {
 					if [[ -v assign[$id] ]]; then
 						echo "${assign[$id]} << terminate $id"
 						if [[ -v hdue[$id] ]]; then
-							unhold_worker_state ${assign[$id]}
+							adjust_worker_state ${assign[$id]} -1
 							echo "${assign[$id]} << report state"
 						fi
 						log "terminate assigned request $id on ${assign[$id]}"
@@ -767,7 +775,7 @@ broker_routine() {
 					queue=($id ${queue[@]})
 					log "request $id failed to be assigned" \
 					    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), queue = ($(omit ${queue[@]}))"
-					unhold_worker_state ${assign[$id]}
+					adjust_worker_state ${assign[$id]} -1
 					echo "${assign[$id]} << report state"
 					unset assign[$id] hdue[$id]
 				fi
@@ -817,42 +825,40 @@ extract_options() {
 }
 
 assign_requests() {
-	declare -A workers_for
-	local id request with worker stat pref workers due
-
-	workers_for["*"]=$(for worker in ${!state[@]}; do
-		stat=${state[$worker]%/*}
-		[ ${stat:0:4} != "busy" ] && echo $worker:$stat
-	done | sort -t':' -k3n -k2r | cut -d':' -f1)
+	declare -A workers
+	local id request with worker pref due
 
 	for id in ${queue[@]}; do
+		pref=$(prefer_workers $id)
+		[[ -v workers[$pref] ]] || workers[$pref]=$(filter "$pref" ${!state[@]})
+		[[ ${workers[$pref]} ]] || continue
+
+		workers[$pref]=$(sort_idle_workers ${workers[$pref]})
+		worker=(${workers[$pref]})
+		[[ $worker ]] || continue
+
 		request="$id {${cmd[$id]}}"
 		with=
 		[[ -v stdin[$id] ]] && with+=" input"
 		[[ -v stdout[$id] ]] && with+=" output"
 		request+=${with:+ with}${with}
 
-		pref=$(prefer_workers $id)
-		if ! [[ -v workers_for[$pref] ]]; then
-			workers_for[$pref]=$(filter "$pref" ${workers_for["*"]})
-		fi
-		workers=(${workers_for[$pref]})
-
-		for worker in ${workers[@]}; do
-			stat=${state[$worker]%/*}
-			[ ${stat:0:4} != "idle" ] && continue
-
-			echo "$worker << request $request"
-			log "assign request $id to $worker"
-			state[$worker]="hold":${state[$worker]:5}
-			assign[$id]=$worker
-			hdue[$id]=${due:=$(($(date +%s%3N)+${hold_timeout:-1000}))}
-			erase_from queue $id
-			id=; break
-		done
-
-		[[ $id ]] && workers_for[$pref]=
+		echo "$worker << request $request"
+		adjust_worker_state $worker +1
+		assign[$id]=$worker
+		hdue[$id]=${due:=$(($(date +%s%3N)+${hold_timeout:-1000}))}
+		erase_from queue $id
+		log "assign request $id to $worker," \
+		    "assume that $worker state ${state[$worker]/:/ } (${hold[$worker]} hold)"
 	done
+}
+
+sort_idle_workers() {
+	local worker stat
+	for worker in $@; do
+		stat=${state[$worker]}
+		[[ $stat == "idle"* ]] && echo $worker:$stat
+	done | sort -t':' -k3n | cut -d':' -f1
 }
 
 prefer_workers() {
@@ -963,28 +969,27 @@ contact_workers() {
 }
 
 discard_workers() {
-	local worker id
+	local worker ids id
 	for worker in "$@"; do
-		unset state[$worker]
+		unset state[$worker] hold[$worker]
 		log "discard the worker state of $worker"
-		for id in $(filter_keys assign $worker); do
-			unset assign[$id]
-			queue=($id ${queue[@]})
-			log "revoke assigned request $id, queue = ($(omit ${queue[@]}))"
-		done
+		ids=$(filter_keys assign $worker)
+		[[ $ids ]] || continue
+		for id in $ids; do unset assign[$id]; done
+		queue=($ids ${queue[@]})
+		log "revoke assigned request $ids, queue = ($(omit ${queue[@]}))"
 	done
 }
 
-unhold_worker_state() {
-	local worker=$1 hold=$2 stat load size
-	if [[ ${state[$worker]} == "hold"* ]]; then
-		load=${state[$worker]:5}
-		load=(${load/\// })
-		size=${load[1]}
-		load=$((load + hold))
-		(( load < size )) && stat="idle" || stat="busy"
-		state[$worker]=$stat:$load/$size
-	fi
+adjust_worker_state() {
+	local worker=$1 adjust=$2 stat load size
+	load=${state[$worker]:5}
+	load=(${load/\// })
+	size=${load[1]}
+	load=$((load + adjust))
+	(( load < size )) && stat=idle || stat=busy
+	state[$worker]=$stat:$load/$size
+	hold[$worker]=$((hold[$worker] + adjust))
 }
 
 handle_extended_input() {
