@@ -817,14 +817,13 @@ extract_options() {
 }
 
 assign_requests() {
-	declare -A workers_for cost_for
-	local id request with worker stat pref workers max_cost due
+	declare -A workers_for
+	local id request with worker stat pref workers due
 
 	workers_for["*"]=$(for worker in ${!state[@]}; do
 		stat=${state[$worker]%/*}
 		[ ${stat:0:4} != "busy" ] && echo $worker:$stat
 	done | sort -t':' -k3n -k2r | cut -d':' -f1)
-	cost_for["*"]=$(extract_anchor_cost ${workers_for["*"]})
 
 	for id in ${queue[@]}; do
 		request="$id {${cmd[$id]}}"
@@ -836,14 +835,11 @@ assign_requests() {
 		pref=$(prefer_workers $id)
 		if ! [[ -v workers_for[$pref] ]]; then
 			workers_for[$pref]=$(filter "$pref" ${workers_for["*"]})
-			cost_for[$pref]=$(extract_anchor_cost ${workers_for[$pref]})
 		fi
 		workers=(${workers_for[$pref]})
-		max_cost=${cost_for[$pref]:--1}
 
 		for worker in ${workers[@]}; do
 			stat=${state[$worker]%/*}
-			(( ${stat:5} > $max_cost )) && break
 			[ ${stat:0:4} != "idle" ] && continue
 
 			echo "$worker << request $request"
@@ -862,13 +858,6 @@ assign_requests() {
 prefer_workers() {
 	local id=$1
 	echo "${prefer[$id]:-*}"
-}
-
-extract_anchor_cost() {
-	local src=(${@:-'?'})
-	src=(${src[${load_balance_relax:-0}]} ${src[-1]})
-	local cost=${state[$src]%/*}; cost=${cost:5}
-	echo ${cost:--1}
 }
 
 observe_overview() {
