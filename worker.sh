@@ -358,12 +358,13 @@ worker_routine() {
 					[[ $tcp_fd ]] && exec 0<&- 1>&-
 					exec $0 "${args[@]}"
 
-				elif [[ "$options" == "plugin "* ]]; then
+				elif [[ "$options" == "plugin "* ]] || [[ "$options" == "source "* ]]; then
+					local mode=${options:0:6}
 					local plug=${options:7}
-					log "accept operate plugin $plug from $who"
-					echo "$who << confirm plugin $plug"
+					log "accept operate $mode $plug from $who"
+					echo "$who << confirm $mode $plug"
 					source $plug >/dev/null 2>&1
-					if [[ :$plugins: != *:$plug:* ]]; then
+					if [[ $mode == "plugin" ]] && [[ :$plugins: != *:$plug:* ]]; then
 						plugins+=${plugins:+:}$plug
 						log "confirm set plugins=\"$plugins\""
 						set_vars+=("plugins")
@@ -373,6 +374,7 @@ worker_routine() {
 					local output=${options:7}
 					echo "$output"
 					log "accept operate output \"$output\" from $who"
+					echo "$who << confirm output $output"
 
 				else
 					log "ignore $command $options from $who"
