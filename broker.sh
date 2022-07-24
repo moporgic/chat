@@ -12,7 +12,7 @@ broker_main() {
 	declare plugins=${plugins}
 	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
-	log "broker version 2022-07-23 (protocol 0)"
+	log "broker version 2022-07-24 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -352,7 +352,7 @@ broker_routine() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 broker 2022-07-23"
+					echo "$who << protocol 0 broker 2022-07-24"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
@@ -855,17 +855,32 @@ assign_requests() {
 	done
 }
 
-sort_idle_workers() {
-	local worker stat
-	for worker in $@; do
-		stat=${state[$worker]}
-		[[ $stat == "idle"* ]] && echo $worker:$stat
-	done | sort -t':' -k3n | cut -d':' -f1
-}
-
 prefer_workers() {
 	local id=$1
 	echo "${prefer[$id]:-*}"
+}
+
+sort_idle_workers() {
+	local workers=() worker stat load
+	for worker in $@; do
+		stat=${state[$worker]}
+		[[ $stat == "idle"* ]] || continue
+		load=${stat:5}
+		load=${load%/*}
+		workers[$load]+=" $worker"
+	done
+	printf "%s\n" ${workers[@]}
+}
+
+adjust_worker_state() {
+	local worker=$1 adjust=$2 stat load size
+	load=${state[$worker]:5}
+	load=(${load/\// })
+	size=${load[1]}
+	load=$((load + adjust))
+	(( load < size )) && stat=idle || stat=busy
+	state[$worker]=$stat:$load/$size
+	hold[$worker]=$((hold[$worker] + adjust))
 }
 
 observe_overview() {
@@ -981,17 +996,6 @@ discard_workers() {
 		queue=($ids ${queue[@]})
 		log "revoke assigned request $ids, queue = ($(omit ${queue[@]}))"
 	done
-}
-
-adjust_worker_state() {
-	local worker=$1 adjust=$2 stat load size
-	load=${state[$worker]:5}
-	load=(${load/\// })
-	size=${load[1]}
-	load=$((load + adjust))
-	(( load < size )) && stat=idle || stat=busy
-	state[$worker]=$stat:$load/$size
-	hold[$worker]=$((hold[$worker] + adjust))
 }
 
 handle_extended_input() {
