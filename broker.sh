@@ -1156,7 +1156,7 @@ envinfo() {
 		echo "CPU Affinity: $(taskset -pc $$ | cut -d' ' -f6) ($(nproc)x)"
 	fi
 	# GPU model
-	local nvsmi=$(nvidia-smi -L 2>&- | sed -E "s/ \(UUID:.+$//g")
+	local nvsmi=$(nvidia-smi -L 2>&- | sed -E "s/ \(UUID:.+$//g" | grep "^GPU")
 	[[ $(wc -l <<< $nvsmi) == 1 ]] && nvsmi=${nvsmi/GPU 0:/GPU:}
 	xargs -rL1 <<< $nvsmi
 	# memory info
