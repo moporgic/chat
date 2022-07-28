@@ -1130,40 +1130,41 @@ input() {
 	fi
 }
 
-envinfo() (
-	exec 2>/dev/null
+envinfo() {
 	# host name
 	echo "Host: $(hostname)"
 	# OS name and version
-	osinfo=$(uname -o 2>/dev/null | sed "s|GNU/||")
+	local osinfo=$(uname -o 2>&- | sed "s|GNU/||")
 	osinfo+=" $(uname -r | sed -E 's/[^0-9.]+.+$//g')"
 	if [[ $OSTYPE =~ cygwin|msys ]]; then
-		ver=($(cmd /c ver 2>/dev/null | tr "[\r\n]" " "))
-		(( ${#ver[@]} )) && osinfo+=" (Windows ${ver[-1]})"
+		local ver=($(cmd /c "ver" 2>&- | tr "[\r\n]" " "))
+		[[ ${ver[@]} ]] && osinfo+=" (Windows ${ver[-1]})"
 	fi
 	echo "OS: $osinfo"
 	# CPU model
-	cpuinfo=$(grep -m1 name /proc/cpuinfo | sed -E 's/.+:|\(\S+\)|CPU|[0-9]+-Core.+|@.+//g' | xargs)
-	nodes=$(lscpu | grep 'NUMA node(s)' | cut -d: -f2 | xargs)
-	if (( ${nodes:-1} != 1 )); then
-		for (( i=0; i<${nodes:-1}; i++ )); do
-			echo "CPU $i: $cpuinfo ($(taskset -c $(lscpu | grep 'NUMA node'$i' CPU' | cut -d: -f2) nproc)x)"
-		done
+	local cpuinfo=$(grep -m1 "model name" /proc/cpuinfo | sed -E 's/.+:|\(\S+\)|CPU|[0-9]+-Core.+|@.+//g' | xargs)
+	local nodes=$(grep "physical id" /proc/cpuinfo | grep -o [0-9] | sort -n | uniq -c)
+	local nproc=() num id
+	while read -r num id; do nproc[$id]=$num; done <<< $nodes
+	if (( ${#nproc[@]} > 1 )) || [[ ! ${nproc[0]} ]]; then
+		for id in ${!nproc[@]}; do echo "CPU $id: $cpuinfo (${nproc[$id]}x)"; done
 	else
-		echo "CPU: $cpuinfo ($(nproc --all)x)"
+		echo "CPU: $cpuinfo (${nproc:-$(nproc --all)}x)"
 	fi
 	# CPU affinity
-	if [ "$(nproc)" != "$(nproc --all)" ]; then
-		echo "CPU $(taskset -pc $$ | cut -d' ' -f4-) ($(nproc)x)"
+	if [ $(nproc) != $(nproc --all) ]; then
+		echo "CPU Affinity: $(taskset -pc $$ | cut -d' ' -f6) ($(nproc)x)"
 	fi
 	# GPU model
-	nvidia-smi -L 2>/dev/null | sed -E "s/ \(UUID:.+$//g" | while IFS= read GPU; do echo "$GPU"; done
+	local nvsmi=$(nvidia-smi -L 2>&- | sed -E "s/ \(UUID:.+$//g")
+	[[ $(wc -l <<< $nvsmi) == 1 ]] && nvsmi=${nvsmi/GPU 0:/GPU:}
+	xargs -rL1 <<< $nvsmi
 	# memory info
-	size=($(head -n1 /proc/meminfo))
+	local size=($(head -n1 /proc/meminfo))
 	size=$((${size[1]}0/1024/1024))
 	size=$((size/10)).$((size%10))
-	echo "RAM: $(printf "%.1fG" $size)"
-)
+	echo "RAM: $(printf %.1fG $size)"
+}
 
 log() {
 	local name=$(basename "${0%.sh}")
