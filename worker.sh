@@ -347,6 +347,7 @@ worker_routine() {
 				if [ "$options" == "shutdown" ]; then
 					echo "$who << confirm shutdown"
 					log "accept operate shutdown from $who"
+					kill ${pid[@]} 2>&-
 					return 0
 
 				elif [ "$options" == "restart" ]; then
@@ -356,6 +357,7 @@ worker_routine() {
 					local vars=() args=()
 					args_of ${set_vars[@]} >/dev/null
 					[[ $tcp_fd ]] && exec 0<&- 1>&-
+					kill ${pid[@]} 2>&-
 					exec $0 "${args[@]}"
 
 				elif [[ "$options" == "plugin "* ]] || [[ "$options" == "source "* ]]; then
