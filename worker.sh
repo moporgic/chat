@@ -861,6 +861,12 @@ retain_from() {
 	eval "${1:-_}=($save)"
 }
 
+copy_function() {
+	local src=${1:?}
+	local dst=${2:-${src}_default}
+	eval "$(echo "${dst}()"; declare -f ${src} | tail -n +2)"
+}
+
 xargs_eval() {
 	local item
 	local read="read -r"
