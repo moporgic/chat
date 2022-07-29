@@ -2,7 +2,7 @@
 
 worker_main() {
 	declare "$@" >&- 2>&-
-	declare set_vars=(${@%%=*} broker worker capacity logfile)
+	declare configs=(${@%%=*} broker worker capacity logfile)
 
 	declare broker=${broker-broker}
 	declare broker=(${broker//:/ })
@@ -13,7 +13,7 @@ worker_main() {
 	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
 	log "worker version 2022-07-30 (protocol 0)"
-	args_of "${set_vars[@]}" | xargs_eval log "option:"
+	args_of "${configs[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
 	declare -A own # [id]=owner
@@ -286,7 +286,7 @@ worker_routine() {
 
 				elif [[ "$options" =~ ^(option|variable|argument)s?(.*)$ ]] ; then
 					local vars=() args=()
-					args_of ${BASH_REMATCH[2]:-${set_vars[@]}} >/dev/null
+					args_of ${BASH_REMATCH[2]:-${configs[@]}} >/dev/null
 					echo "$who << options = (${vars[@]})"
 					[[ ${args[@]} ]] && printf "$who << # %s\n" "${args[@]}"
 					log "accept query options from $who, options = ($(omit ${vars[@]}))"
@@ -310,7 +310,7 @@ worker_routine() {
 				eval $var="\"$val\""
 				echo "$who << accept set ${var}${val:+=${val}}"
 				log "accept set ${var}${val:+=\"${val}\"} from $who"
-				set_vars+=($var)
+				configs+=($var)
 
 				if [ "$var" == "broker" ]; then
 					change_broker "$val_old" "${broker//:/ }"
@@ -326,7 +326,7 @@ worker_routine() {
 			elif [ "$command" == "unset" ]; then
 				local regex_forbidden_unset="^(worker|state|linked)$"
 				local var=(${options/=/ })
-				set_vars+=($var)
+				configs+=($var)
 
 				if [ "$var" ] && ! [[ $var =~ $regex_forbidden_unset ]]; then
 					local show_val="$var[@]"
@@ -355,7 +355,7 @@ worker_routine() {
 					log "accept operate restart from $who"
 					log "${worker:-worker} is restarting..."
 					local vars=() args=()
-					args_of ${set_vars[@]} >/dev/null
+					args_of ${configs[@]} >/dev/null
 					[[ $tcp_fd ]] && exec 0<&- 1>&-
 					kill ${pid[@]} 2>&-
 					exec $0 "${args[@]}"
@@ -369,7 +369,7 @@ worker_routine() {
 					if [[ $mode == "plugin" ]] && [[ :$plugins: != *:$plug:* ]]; then
 						plugins+=${plugins:+:}$plug
 						log "confirm set plugins=\"$plugins\""
-						set_vars+=("plugins")
+						configs+=("plugins")
 					fi
 
 				elif [[ "$options" == "output "* ]]; then
