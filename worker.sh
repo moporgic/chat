@@ -862,7 +862,7 @@ retain_from() {
 }
 
 override() {
-	eval "$(echo "${1}_default()"; declare -f ${1} | tail -n +2)"
+	eval "$(echo "${1}_default()"; declare -f ${1} | tail -n +2)" 2>&-
 }
 
 invoke_overridden() {
