@@ -1105,10 +1105,12 @@ retain_from() {
 	eval "${1:-_}=($save)"
 }
 
-copy_function() {
-	local src=${1:?}
-	local dst=${2:-${src}_default}
-	eval "$(echo "${dst}()"; declare -f ${src} | tail -n +2)"
+override() {
+	eval "$(echo "${1}_default()"; declare -f ${1} | tail -n +2)"
+}
+
+invoke_overridden() {
+	${1}_default "${@:2}"
 }
 
 xargs_eval() {
