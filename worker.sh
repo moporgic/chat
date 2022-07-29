@@ -2,7 +2,7 @@
 
 worker_main() {
 	declare "$@" >&- 2>&-
-	declare set_vars=("$@" broker worker capacity logfile)
+	declare set_vars=(${@%%=*} broker worker capacity logfile)
 
 	declare broker=${broker-broker}
 	declare broker=(${broker//:/ })
@@ -12,7 +12,7 @@ worker_main() {
 	declare plugins=${plugins}
 	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
-	log "worker version 2022-07-21 (protocol 0)"
+	log "worker version 2022-07-30 (protocol 0)"
 	args_of "${set_vars[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 
@@ -229,7 +229,7 @@ worker_routine() {
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 worker 2022-07-21"
+					echo "$who << protocol 0 worker 2022-07-30"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
