@@ -828,7 +828,7 @@ extract_options() {
 
 assign_requests() {
 	declare -A workers
-	local id request with worker pref due
+	local id request with worker pref
 
 	for id in ${queue[@]}; do
 		pref=$(prefer_workers $id)
@@ -848,7 +848,7 @@ assign_requests() {
 		echo "$worker << request $request"
 		adjust_worker_state $worker +1
 		assign[$id]=$worker
-		hdue[$id]=${due:=$(($(date +%s%3N)+${hold_timeout:-1000}))}
+		hdue[$id]=$(($(date +%s%3N)+${hold_timeout:-1000}*${hold[$worker]}))
 		erase_from queue $id
 		log "assign request $id to $worker," \
 		    "assume that $worker state ${state[$worker]/:/ } (${hold[$worker]} hold)"
