@@ -791,6 +791,8 @@ init_system_io() {
 	return 16
 }
 
+cleanup() { :; }
+
 args_of() {
 	args=() vars=()
 	local var val arg show=${show:0:3}
@@ -943,7 +945,7 @@ log() {
 	fi
 	trap 'log "${'$name:-$name'} has been interrupted"; exit 64' INT
 	trap 'log "${'$name:-$name'} has been terminated"; exit 64' TERM
-	trap 'code=$?; cleanup 2>&-; log "${'$name:-$name'} is terminated"; exit $code' EXIT
+	trap 'code=$?; cleanup; log "${'$name:-$name'} is terminated"; exit $code' EXIT
 
 	log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
 	log "$@"
