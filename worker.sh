@@ -862,11 +862,15 @@ retain_from() {
 }
 
 override() {
-	eval "$(echo "${1}_default()"; declare -f ${1} | tail -n +2)" 2>&-
+	eval "local level=${1}_override_level"
+	eval "$(echo "${1}_override_$((level))()"; declare -f ${1} | tail -n +2)" 2>&-
+	eval "${1}_override_level=$((level+1))"
 }
 
 invoke_overridden() {
-	${1}_default "${@:2}"
+	eval "local level=${invoke_level:-${1}_override_level}"
+	(( level-- )) || return 255
+	invoke_level=$level ${1}_override_$level "${@:2}"
 }
 
 xargs_eval() {
