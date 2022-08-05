@@ -857,7 +857,7 @@ assign_requests() {
 
 prefer_workers() {
 	local id=$1
-	echo "${prefer[$id]:-*}"
+	echo "${prefer[$id]:-${prefer_workers:-*}}"
 }
 
 sort_idle_workers() {
