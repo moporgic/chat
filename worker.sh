@@ -187,7 +187,7 @@ worker_routine() {
 				if [ "${own[$id]}" == "$who" ]; then
 					echo "$who << accept terminate $id"
 					log "accept terminate $id from $who"
-					if kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null; then
+					if kill_request $id; then
 						log "request $id has been terminated successfully"
 					fi
 					[[ -v stdin[$id] ]] && exec {stdin[$id]}>&-
@@ -347,7 +347,7 @@ worker_routine() {
 				if [ "$options" == "shutdown" ]; then
 					echo "$who << confirm shutdown"
 					log "accept operate shutdown from $who"
-					kill ${pid[@]} 2>&-
+					kill_request ${pid[@]}
 					return 0
 
 				elif [ "$options" == "restart" ]; then
@@ -357,7 +357,7 @@ worker_routine() {
 					local vars=() args=()
 					args_of ${configs[@]} >/dev/null
 					[[ $tcp_fd ]] && exec 0<&- 1>&-
-					kill ${pid[@]} 2>&-
+					kill_request ${pid[@]}
 					exec $0 "${args[@]}"
 
 				elif [[ "$options" == "plugin "* ]] || [[ "$options" == "source "* ]]; then
@@ -625,7 +625,7 @@ discard_owned_assets() {
 			log "discard request $id and response $id"
 		elif [[ -v pid[$id] ]]; then
 			log "discard and terminate request $id"
-			kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null
+			kill_request $id
 		fi
 		[[ -v stdin[$id] ]] && exec {stdin[$id]}>&-
 		unset own[$id] cmd[$id] res[$id] pid[$id] stdin[$id] stdout[$id]
@@ -651,6 +651,15 @@ change_broker() {
 	fi
 	erase_from linked ${added[@]} ${removed[@]}
 	broker=(${pending[@]})
+}
+
+kill_request() {
+	local id code=0
+	for id in $@; do
+		kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null
+		code=$(($?|code))
+	done
+	return $code
 }
 
 cmdpidof() {
