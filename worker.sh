@@ -10,11 +10,11 @@ worker_main() {
 	declare capacity=${capacity-$(nproc)}
 	declare logfile=${logfile}
 	declare plugins=${plugins}
-	xargs_eval -d: source {} >&- 2>&- <<< $plugins
 
-	log "worker version 2022-07-30 (protocol 0)"
+	log "worker version 2022-10-03 (protocol 0)"
 	args_of "${configs[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
+	xargs_eval -d: source {} >&- <<< $plugins
 
 	declare -A own # [id]=owner
 	declare -A cmd # [id]=command
@@ -229,7 +229,7 @@ worker_routine() {
 
 			elif [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 worker 2022-07-30"
+					echo "$who << protocol 0 worker 2022-10-03"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "state" ]; then
