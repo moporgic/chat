@@ -4,7 +4,7 @@ main() {
 	declare "$@" >/dev/null 2>&1
 	declare configs=(name ${@%%=*} logfile)
 
-	declare name=${name-node}
+	declare name=${name-$(name)}
 	declare brokers=(${brokers//:/ } ${broker//:/ })
 	declare workers=(${workers//:/ } ${worker//:/ })
 	declare capacity=${capacity-+65536}
@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2022-10-20 (protocol 0)"
+	log "chat::node version 2022-10-31 (protocol 0)"
 	args_of "${configs[@]}" | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	xargs_eval -d: source {} >/dev/null <<< $plugins
@@ -61,30 +61,28 @@ session() {
 
 	local regex_request="^(\S+) >> request (([0-9]+) )?(\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$"
 	local regex_response="^(\S+) >> response (\S+) (\S+) \{(.*)\}$"
-	local regex_terminate="^(\S+) >> terminate (\S+)$"
-	local regex_confirm="^(\S+) >> (accept|reject|confirm) (state|request|response|terminate|protocol) (.+)$"
-	local regex_worker_state="^(\S+) >> notify state (idle|busy|full) (\S+/\S+)( \((.*)\))?$"
+	local regex_terminate="^(\S+) >> terminate (.+)$"
+	local regex_confirm="^(\S+) >> (accept|reject|confirm) (\S+) (.+)$"
+	local regex_worker_state="^(\S+) >> notify state (idle|busy|full) (\S+)/(\S+)( \((.*)\))?$"
 	local regex_others="^(\S+) >> (query|report|operate|shell|set|unset|use|subscribe|unsubscribe) (.+)$"
 	local regex_chat_system="^(#|%) (.+)$"
-	local regex_request_input="^input (\{(.*)\}|(.+))$"
 
 	local message
 	while input message; do
 		if [[ $message =~ $regex_worker_state ]]; then
-			# ^(\S+) >> notify state (idle|busy|full) (\S+/\S+)( \((.*)\))?$
+			# ^(\S+) >> notify state (idle|busy|full) (\S+)/(\S+)( \((.*)\))?$
 			local worker=${BASH_REMATCH[1]}
 			local stat=${BASH_REMATCH[2]}
 			local load=${BASH_REMATCH[3]}
-			local owned=${BASH_REMATCH[4]}
-			echo "$worker << confirm state $stat $load"
+			local size=${BASH_REMATCH[4]}
+			local owned=${BASH_REMATCH[5]}
 
+			echo "$worker << confirm state $stat $load/$size"
 			if (( ! hold[$worker] )); then
-				log "confirm that $worker state $stat $load"
-				state[$worker]=$stat:$load
+				log "confirm that $worker state $stat $load/$size"
+				state[$worker]=$stat:$load/$size
 			else
-				local load=(${load/\// })
-				local size=${load[1]}
-				load=$((load+hold[$worker]))
+				load=$((load + hold[$worker]))
 				(( load < size )) && stat="idle" || stat="busy"
 				log "confirm that $worker state $stat $load/$size (${hold[$worker]} hold)"
 				state[$worker]=$stat:$load/$size
@@ -100,7 +98,7 @@ session() {
 			fi
 
 		elif [[ $message =~ $regex_confirm ]]; then
-			# ^(\S+) >> (accept|reject|confirm) (state|request|response|terminate|protocol) (\S+)$
+			# ^(\S+) >> (accept|reject|confirm) (\S+) (.+)$
 			local who=${BASH_REMATCH[1]}
 			local confirm=${BASH_REMATCH[2]}
 			local type=${BASH_REMATCH[3]}
@@ -112,10 +110,10 @@ session() {
 
 			elif [ "$type" == "request" ]; then
 				local ids=()
-				if [ "${assign[$id]}" == "$who" ] && [[ -v hdue[$id] ]]; then
+				if [[ ${assign[$id]} == $who ]] && [[ -v hdue[$id] ]]; then
 					ids=($id)
 				elif [[ $id == *[^0-9]* ]]; then
-					ids=($(filter_keys assign "$id" "$who" | sort -n))
+					ids=($(<<<$id xargs_eval -d' ' "filter_keys assign \"{}\" $who" | sort -nu))
 					retain_from ids ${!hdue[@]}
 				fi
 				if [[ ${ids[@]} ]] && [ "$confirm" == "accept" ]; then
@@ -130,6 +128,7 @@ session() {
 						unset hdue[$id] assign[$id]
 					done
 					adjust_worker_state $who -${#ids[@]}
+					hold[$who]=$((hold[$who]-${#ids[@]}))
 					queue=(${ids[@]} ${queue[@]})
 					log "confirm that $who ${confirm}ed $type ${ids[@]}, queue = ($(omit ${queue[@]}))"
 				elif [[ -v stdin[$id] ]] && [ "$confirm" == "confirm" ]; then
@@ -140,10 +139,10 @@ session() {
 
 			elif [ "$type" == "response" ]; then
 				local ids=()
-				if [ "${own[$id]}" == "$who" ] && [[ -v res[$id] ]]; then
+				if [[ ${own[$id]} == $who ]] && [[ -v res[$id] ]]; then
 					ids=($id)
 				elif [[ $id == *[^0-9]* ]]; then
-					ids=($(filter_keys own "$id" "$who" | sort -n))
+					ids=($(<<<$id xargs_eval -d' ' "filter_keys own \"{}\" $who" | sort -nu))
 					retain_from ids ${!res[@]}
 				fi
 				if [[ ${ids[@]} ]] && [ "$confirm" == "accept" ]; then
@@ -152,14 +151,15 @@ session() {
 					done
 					log "confirm that $who ${confirm}ed $type ${ids[@]}"
 				elif [[ ${ids[@]} ]] && [ "$confirm" == "reject" ]; then
-					for id in ${ids[@]}; do
-						unset res[$id]
-						[[ -v stdin[$id] ]] && stdin[$id]=
-						[[ -v stdout[$id] ]] && stdout[$id]=
-						[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+${tmout[$id]}))
-						echo "$who << accept request $id"
-					done
 					queue+=(${ids[@]})
+					for id in ${ids[@]}; do
+						if confirm_request $id && initialize_request $id; then
+							echo "$who << accept request $id"
+						else
+							echo "$who << reject request $id"
+							erase_from queue $id
+						fi
+					done
 					log "confirm that $who ${confirm}ed $type ${ids[@]}, queue = ($(omit ${queue[@]}))"
 				elif [[ -v stdout[$id] ]] && [ "$confirm" == "confirm" ]; then
 					log "confirm that $who ${confirm}ed $type $id output"
@@ -171,18 +171,15 @@ session() {
 				local ids=() ida=()
 				if [[ ! -v assign[$id] ]]; then
 					ids=($id)
-				elif [ "${assign[$id]}" == "$who" ]; then
+				elif [[ ${assign[$id]} == $who ]]; then
 					ids=($id)
 					ida=($id)
 				elif [[ $id == *[^0-9]* ]]; then
-					ids=($(filter_keys assign "$id" "$who" | sort -n))
-					retain_from ids ${!assign[@]}
+					ids=($(<<<$id xargs_eval -d' ' "filter_keys assign \"{}\" $who" | sort -nu))
 					ida=(${ids[@]})
 				fi
 				if [[ ${ida[@]} ]] && ([ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]); then
-					for id in ${ida[@]}; do
-						unset assign[$id] hdue[$id]
-					done
+					for id in ${ida[@]}; do unset assign[$id]; done
 					queue=(${ida[@]} ${queue[@]})
 					log "confirm that $who ${confirm}ed $type ${ids[@]}, queue = ($(omit ${queue[@]}))"
 				elif [[ ${ids[@]} ]]; then
@@ -195,19 +192,16 @@ session() {
 				if [ "$confirm" == "accept" ]; then
 					log "handshake with $who successfully"
 					subscribe state $who
-					log "subscribed state for $who automatically"
+					log "subscribed state for new broker $who"
 					observe_state
 					echo "$who << notify state ${system_state[@]}"
-
 				elif [ "$confirm" == "reject" ]; then
 					log "handshake failed, unsupported protocol; shutdown"
 					return 2
 				fi
 
-			elif [ "$type" == "confirm" ]; then
-				log "confirm that $who ${confirm}ed $type $option"
-			else
-				log "ignore that $who ${confirm}ed $type $option from $who"
+			elif ! handle_extended_input "$message"; then
+				log "ignore that $who ${confirm}ed $type $option"
 			fi
 
 		elif [[ $message =~ $regex_request ]]; then
@@ -230,32 +224,9 @@ session() {
 				own[$id]=$owner
 				cmd[$id]=$command
 				queue+=($id)
-				if [[ ${opts[enqueue]} == preempt ]]; then
-					local ids=() it=$id
-					for id in ${queue[@]}; do
-						[[ ${own[$id]} == $owner ]] && ids+=($it) it=$id || ids+=($id)
-					done
-					queue=(${ids[@]})
-					options+="enqueue=${opts[enqueue]} "
-				fi
-				if [[ ${opts[timeout]} == [1-9]* ]]; then
-					tmout[$id]=$(millisec ${opts[timeout]})
-					tmdue[$id]=$(($(date +%s%3N)+tmout[$id]))
-					options+="timeout=${opts[timeout]} "
-				fi
-				if [[ ${opts[workers]} ]]; then
-					prefer[$id]=${opts[workers]}
-					options+="workers=${opts[workers]} "
-				fi
-				if [[ -v opts[input] ]]; then
-					stdin[$id]=
-					options+="input "
-				fi
-				if [[ -v opts[output] ]]; then
-					stdout[$id]=
-					options+="output "
-				fi
-				if confirm_request $id; then
+				optionalize_request $id
+
+				if confirm_request $id && initialize_request $id; then
 					id_next=$((id+1))
 					echo "$owner << accept request $request"
 					log "accept request $id {$command} ${options:+with $options}from $owner, queue = ($(omit ${queue[@]}))"
@@ -266,8 +237,7 @@ session() {
 					log "reject request $id {$command} ${options:+with $options}from $owner due to policy"
 				fi
 
-			elif [[ -v stdin[$id] ]] && [[ $command =~ $regex_request_input ]]; then
-				# ^input (\{(.*)\}|(.+))$
+			elif [[ -v stdin[$id] ]] && [[ $command =~ ^input\ (\{(.*)\}|(.+))$ ]]; then
 				local input=${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}
 				if [[ ${own[$id]} == $owner ]] && [[ -v assign[$id] ]] && [[ ! -v hdue[$id] ]]; then
 					if [[ ${assign[$id]} != $name ]]; then
@@ -309,8 +279,9 @@ session() {
 			if [[ -v cmd[$id] ]] && [ "${assign[$id]}" == "$worker" ]; then
 				if [ $code != output ]; then
 					res[$id]=$code:${stdout[$id]}$output
+					adjust_worker_state $worker -1
 					[[ -v stdout[$id] ]] && stdout[$id]=
-					unset assign[$id] tmdue[$id] hdue[$id]
+					unset assign[$id] tmdue[$id]
 					echo "$worker << accept response $id"
 				else
 					stdout[$id]+=$output\\n
@@ -331,22 +302,22 @@ session() {
 			fi
 
 		elif [[ $message =~ $regex_terminate ]]; then
-			# ^(\S+) >> terminate (\S+)$
+			# ^(\S+) >> terminate (.+)$
 			local who=${BASH_REMATCH[1]}
 			local id=${BASH_REMATCH[2]}
 
 			local ids=()
-			if [ "${own[$id]}" == "$who" ] && [[ ! -v res[$id] ]]; then
+			if [[ ${own[$id]} == $who ]] && [[ ! -v res[$id] ]]; then
 				ids=($id)
 			elif [[ $id == *[^0-9]* ]]; then
-				ids=($(filter_keys own "$id" "$who" | sort -n))
+				ids=($(<<<$id xargs_eval -d' ' "filter_keys own \"{}\" $who" | sort -nu))
 				erase_from ids ${!res[@]}
 			fi
 			if [[ ${ids[@]} ]]; then
 				printf "$who << accept terminate %d\n" ${ids[@]}
-				terminate ${ids[@]}
 				for id in ${ids[@]}; do
-					unset cmd[$id] own[$id] tmout[$id] prefer[$id] stdin[$id] stdout[$id]
+					terminate $id
+					unset cmd[$id] own[$id] tmout[$id] tmdue[$id] prefer[$id] stdin[$id] stdout[$id]
 				done
 				log "accept terminate ${ids[@]} from $who, queue = ($(omit ${queue[@]}))"
 
@@ -366,14 +337,14 @@ session() {
 
 			if [ "$command" == "query" ]; then
 				if [ "$options" == "protocol" ]; then
-					echo "$who << protocol 0 version 2022-10-20"
+					echo "$who << protocol 0 version 2022-10-31"
 					log "accept query protocol from $who"
 
 				elif [ "$options" == "overview" ]; then
 					echo "$who << overview = ${overview[@]}"
 					log "accept query overview from $who, overview = ${overview[@]}"
 
-				elif [ "$options" == "capacity" ]; then
+				elif [ "$options" == "capacity" ] || [ "$options" == "affinity" ]; then
 					observe_capacity
 					echo "$who << capacity = ${system_capacity[@]:0:2} (${system_capacity[@]:2})"
 					log "accept query capacity from $who, capacity = ${system_capacity[@]:0:2}" \
@@ -399,7 +370,7 @@ session() {
 
 				elif [[ "$options" =~ ^(broker)s?(.*)$ ]]; then
 					local query=() broker
-					query=(${BASH_REMATCH[2]:-$(<<< ${notify[state]} xargs -rn1 | sort)})
+					query=(${BASH_REMATCH[2]:-$(printf "%s\n" ${notify[state]} | sort)})
 					retain_from query ${notify[state]}
 					echo "$who << brokers = (${query[@]})"
 					for broker in ${query[@]}; do
@@ -410,7 +381,7 @@ session() {
 
 				elif [[ "$options" =~ ^(worker)s?(.*)$ ]]; then
 					local query=() worker
-					query=(${BASH_REMATCH[2]:-$(<<< ${!state[@]} xargs -rn1 | sort)})
+					query=(${BASH_REMATCH[2]:-$(printf "%s\n" ${!state[@]} | sort)})
 					retain_from workers ${!state[@]}
 					echo "$who << workers = (${query[@]})"
 					for worker in ${workers[@]}; do
@@ -421,7 +392,7 @@ session() {
 
 				elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -rn1 | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(printf "%s\n" ${!cmd[@]} | sort -n)})
 					retain_from ids ${!cmd[@]}
 					echo "$who << jobs = (${ids[@]})"
 					for id in ${ids[@]}; do
@@ -439,7 +410,7 @@ session() {
 
 				elif [[ "$options" =~ ^(request)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!cmd[@]} xargs -rn1 | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(printf "%s\n" ${!cmd[@]} | sort -n)})
 					retain_from ids $(filter_keys own $who)
 					erase_from ids ${!res[@]}
 					echo "$who << requests = (${ids[@]})"
@@ -456,7 +427,7 @@ session() {
 
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -rn1 | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(printf "%s\n" ${!res[@]} | sort -n)})
 					retain_from ids $(filter_keys own $who)
 					retain_from ids ${!res[@]}
 					echo "$who << responses = (${ids[@]})"
@@ -479,7 +450,7 @@ session() {
 					<<< $envinfo xargs -r -d'\n' -L1 echo "$who << #"
 					log "accept query envinfo from $who, envinfo = ($envitem)"
 
-				else
+				elif ! handle_extended_input "$message"; then
 					log "ignore $command $options from $who"
 				fi &
 
@@ -498,21 +469,20 @@ session() {
 					echo "$who << notify state ${system_status[@]}"
 				elif [[ "$options" =~ ^(response|result)s?(.*)$ ]] ; then
 					local ids=() id
-					ids=(${BASH_REMATCH[2]:-$(<<< ${!res[@]} xargs -rn1 | sort -n)})
+					ids=(${BASH_REMATCH[2]:-$(printf "%s\n" ${!res[@]} | sort -n)})
 					retain_from ids $(filter_keys own $who)
 					retain_from ids ${!res[@]}
 					log "accept report responses from $who, responses = ($(omit ${ids[@]}))"
 					for id in ${ids[@]}; do
 						echo "$who << response $id ${res[$id]%%:*} {${res[$id]#*:}}"
 					done
-				else
+				elif ! handle_extended_input "$message"; then
 					log "ignore $command $options from $who"
 				fi &
 
 			elif [ "$command" == "use" ]; then
-				local regex_use_protocol="^protocol (\S+)$"
-				if [[ "$options" =~ $regex_use_protocol ]]; then
-					local protocol=${BASH_REMATCH[1]}
+				if [[ "$options" == "protocol "* ]]; then
+					local protocol=${options:9}
 					if [ "$protocol" == "0" ]; then
 						echo "$who << accept protocol $protocol"
 						log "accept use protocol $protocol from $who"
@@ -520,7 +490,7 @@ session() {
 						echo "$who << reject protocol $protocol"
 						log "reject use protocol $protocol from $who, unsupported protocol"
 					fi
-				else
+				elif ! handle_extended_input "$message"; then
 					log "ignore $command $options from $who"
 				fi
 
@@ -542,7 +512,7 @@ session() {
 						observe_capacity
 						echo "$who << notify capacity ${system_capacity[@]}"
 					fi
-				else
+				elif ! handle_extended_input "$message"; then
 					echo "$who << reject $command $options"
 					log "reject $command $options from $who, unsupported subscription"
 				fi
@@ -553,7 +523,7 @@ session() {
 					unsubscribe $item $who
 					echo "$who << accept $command $options"
 					log "accept $command $options from $who"
-				else
+				elif ! handle_extended_input "$message"; then
 					echo "$who << reject $command $options"
 					log "reject $command $options from $who, unsupported subscription"
 				fi
@@ -561,124 +531,99 @@ session() {
 			elif [ "$command" == "set" ]; then
 				local var=(${options/=/ })
 				local val=${options:${#var}+1}
-				local show_val="$var[@]"
-				local val_old="${!show_val}"
-				eval $var="\"$val\""
-				configs+=($var)
-				echo "$who << accept set ${var}${val:+=${val}}"
-				log "accept set ${var}${val:+=\"${val}\"} from $who"
 
-				if [ "$var" == "name" ]; then
-					log "node name has been changed, register $name on the chat system..."
-					echo "name $name"
-				elif [ "$var" == "brokers" ] || [ "$var" == "broker" ]; then
-					brokers=${!var}; brokers=(${brokers//:/ })
-					change_brokers "$val_old" "${brokers[@]}"
-					erase_from configs brokers broker; configs+=(brokers)
-				elif [ "$var" == "workers" ] || [ "$var" == "worker" ]; then
-					workers=${!var}; workers=(${workers//:/ })
-					change_workers "$val_old" "${workers[@]}"
-					erase_from configs workers worker; configs+=(workers)
-				elif [ "$var" == "capacity" ]; then
-					set_capacity ${capacity}
-				elif [ "$var" == "affinity" ]; then
-					set_affinity ${affinity:-$(nproc)}
-				elif [ "$var" == "plugins" ]; then
-					xargs_eval -d: source {} >/dev/null <<< $plugins
-				fi
+				local confirm
+				set_config $var "$val" && confirm="accept" || confirm="reject"
+				echo "$who << $confirm set ${var}${val:+=${val}}"
+				log "$confirm set ${var}${val:+=\"${val}\"} from $who"
 
 			elif [ "$command" == "unset" ]; then
 				local var=(${options/=/ })
-				local show_val="$var[@]"
-				local val_old="${!show_val}"
-				eval $var=
-				erase_from configs $var
-				echo "$who << accept unset $var"
-				log "accept unset $var from $who"
 
-				if [ "$var" == "name" ]; then
-					name=$(basename "${0%.sh}")
-					log "node name has been changed, register $name on the chat system..."
-					echo "name $name"
-				elif [ "$var" == "brokers" ] || [ "$var" == "broker" ]; then
-					brokers=()
-					discard_brokers $val_old
-					erase_from configs brokers broker
-				elif [ "$var" == "workers" ] || [ "$var" == "worker" ]; then
-					workers=()
-					discard_workers $val_old
-					erase_from configs workers worker
-				elif [ "$var" == "capacity" ]; then
-					set_capacity 0
-				elif [ "$var" == "affinity" ]; then
-					set_affinity 0
-				fi
+				local confirm
+				unset_config $var && confirm="accept" || confirm="reject"
+				echo "$who << $confirm unset $var"
+				log "$confirm unset $var from $who"
 
 			elif [ "$command" == "operate" ]; then
-				local regex_operate_power="^(shutdown|restart) ?(.*)$"
-				local regex_operate_workers="^(contact|discard) ?(.*)$"
-
-				if [[ "$options" =~ $regex_operate_power ]]; then
+				if [[ "$options" =~ ^(shutdown|restart)(\ (.+))?$ ]]; then
 					local type=${BASH_REMATCH[1]}
-					local patt=${BASH_REMATCH[2]:-$name}
-					local matches=($(<<<$patt xargs -rn1 | xargs_eval "filter \"{}\" ${!state[@]} $name"))
+					local patt=${BASH_REMATCH[3]:-$name}
+					local matches=($(<<<$patt xargs_eval -d' ' "filter \"{}\" ${!state[@]} $name" | sort -u))
 
+					echo "$who << confirm $type ${matches[@]}"
 					local match
 					for match in ${matches[@]}; do
 						if [[ -v state[$match] ]] && [ "$match" != "$name" ]; then
-							echo "$who << confirm $type $match"
 							log "accept operate $type on $match from $who"
 							echo "$match << operate $type"
 						fi
 					done
 					if [[ " ${matches[@]} " == *" $name "* ]]; then
-						echo "$who << confirm $type $name"
 						log "accept operate $type on $name from $who"
 						if [ "$type" == "shutdown" ]; then
 							declare -g name=$name
-							kill_request ${pid[@]}
+							foreach kill_request ${!pid[@]}
 							return 0
 						elif [ "$type" == "restart" ]; then
-							log "${name:-node} is restarting..."
-							kill_request ${pid[@]}
+							log "$(name) is restarting..."
+							foreach kill_request ${!pid[@]}
 							local vars=() args=()
 							args_of ${configs[@]} >/dev/null
 							[[ $tcp_fd ]] && exec 0<&- 1>&-
+							[[ $res_fd ]] && exec {res_fd}<&- {res_fd}>&-
 							exec $0 "${args[@]}"
 						fi
 					fi
 
-				elif [[ "$options" =~ $regex_operate_workers ]]; then
+				elif [[ "$options" =~ ^(contact|discard|forward)\ (brokers?|workers?)(\ (.+))?$ ]]; then
 					local type=${BASH_REMATCH[1]}
-					local patt=${BASH_REMATCH[2]:-"*"}
+					local what=${BASH_REMATCH[2]}
+					local option=${BASH_REMATCH[4]:-"*"}
 
 					if [ "$type" == "contact" ]; then
-						log "accept operate $type $patt from $who"
-						echo "$who << confirm $type $patt"
-						contact_workers "$patt"
+						log "accept operate $type $what $option from $who"
+						echo "$who << confirm $type $what $option"
+						foreach contact_${what%s} "$option"
 
 					elif [ "$type" == "discard" ]; then
-						log "accept operate $type $patt from $who"
-						local worker
-						for worker in $(<<<$patt xargs -rn1 | xargs_eval "filter \"{}\" ${!state[@]}"); do
-							printf "$who << confirm $type %s\n" $worker
-							discard_workers $worker
-						done
+						log "accept operate $type $what $option from $who"
+						[[ $what == broker* ]] && clients+=($(<<<$option xargs_eval -d' ' "filter \"{}\" ${notify[state]}"))
+						[[ $what == worker* ]] && clients+=($(<<<$option xargs_eval -d' ' "filter \"{}\" ${!state[@]}"))
+						clients=($(printf "%s\n" ${clients[@]} | sort -u))
+						if [[ ${clients[@]} ]]; then
+							echo "$who << confirm $type $what ${clients[@]}"
+							foreach discard_${what%s} ${clients[@]}
+						fi
+
+					elif [ "$type" == "forward" ]; then
+						local clients=() who
+						[[ $what == broker* ]] && clients+=(${notify[state]})
+						[[ $what == worker* ]] && clients+=(${!state[@]})
+						clients=($(printf "%s\n" ${clients[@]} | sort -u))
+						if [[ ${clients[@]} ]]; then
+							echo "$who << confirm $type $what $option, ${what%s}s = ${clients[@]}"
+							for who in ${clients[@]}; do echo "$who << $option"; done
+						fi
 					fi
 
-				# elif [[ "$options" == "broadcast "* ]]; then
-
 				elif [[ "$options" == "plugin "* ]] || [[ "$options" == "source "* ]]; then
-					local mode=${options:0:6}
+					local what=${options:0:6}
 					local plug=${options:7}
-					log "accept operate $mode $plug from $who"
-					echo "$who << confirm $mode $plug"
+					log "accept operate $what $plug from $who"
+					echo "$who << confirm $what $plug"
 					source $plug >/dev/null 2>&1
-					if [[ $mode == "plugin" ]] && [[ :$plugins: != *:$plug:* ]]; then
+					if [[ $what == "plugin" ]] && [[ :$plugins: != *:$plug:* ]]; then
 						plugins+=${plugins:+:}$plug
 						log "confirm set plugins=\"$plugins\""
 						configs+=("plugins")
 					fi
+
+				elif [[ "$options" == "shell "* ]]; then
+					local options=${options:6}
+					echo "$who << accept operate shell {$options}"
+					log "accept operate shell {$options} from $who"
+					operate_eval "$options"
 
 				elif [[ "$options" == "output "* ]]; then
 					local output=${options:7}
@@ -686,7 +631,7 @@ session() {
 					log "accept operate output \"$output\" from $who"
 					echo "$who << confirm output $output"
 
-				else
+				elif ! handle_extended_input "$message"; then
 					log "ignore $command $options from $who"
 				fi
 
@@ -694,16 +639,9 @@ session() {
 				[[ $options =~ ^(\{(.+)\}|(.+))$ ]] && options=${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}
 				echo "$who << accept execute shell {$options}"
 				log "accept execute shell {$options} from $who"
-				{
-					local output code lines
-					output=$(eval "$options" 2>&1)
-					code=$?
-					lines=$((${#output} ? $(<<<$output wc -l) : 0))
-					echo "$who << result shell {$options} return $code ($lines)"
-					echo -n "$output" | xargs -r -d'\n' -L1 echo "$who << #"
-				} &
+				operate_eval "$options" &
 
-			else
+			elif ! handle_extended_input "$message"; then
 				log "ignore $command $options from $who"
 			fi
 
@@ -713,210 +651,95 @@ session() {
 			local info=${BASH_REMATCH[2]}
 
 			if [ "$type" == "#" ]; then
-				local regex_login="^login: (\S+)$"
-				local regex_logout="^logout: (\S+)$"
-				local regex_rename="^name: (\S+) becomes (\S+)$"
+				if [[ $info == "login: "* ]]; then
+					local who=${info:7}
+					handle_node_login $who
 
-				if [[ $info =~ $regex_login ]]; then
-					local who=${BASH_REMATCH[1]}
+				elif [[ $info == "logout: "* ]]; then
+					local who=${info:8}
+					handle_node_logout $who
 
-					if contains brokers $who; then
-						log "broker $who connected"
-						contact_brokers $new
-					fi
-					if contains workers $who; then
-						log "worker $who connected"
-						contact_workers $new
-					fi
+				elif [[ $info == "name: "*" becomes "* ]]; then
+					local who=${info:6}; who=${who%% *}
+					local new=${info##* }
+					handle_node_rename $who $new
 
-				elif [[ $info =~ $regex_logout ]]; then
-					local who=${BASH_REMATCH[1]}
-
-					log "$who logged out"
-					if contains brokers $who; then
-						log "broker $who disconnected, wait until $who come back..."
-					elif contains workers $who; then
-						log "worker $who disconnected, wait until $who come back..."
-					fi
-					if [[ -v state[$who] ]]; then
-						discard_workers $who
-					fi
-					if contains own $who && [[ ! ${keep_unowned_tasks} ]]; then
-						discard_owned_assets $(filter_keys own $who)
-					fi
-					local item
-					for item in $(vfmt=" %s " filter_keys notify "* $who *"); do
-						log "unsubscribe $item for $who"
-						unsubscribe $item $who
-					done
-
-				elif [[ $info =~ $regex_rename ]]; then
-					local who=${BASH_REMATCH[1]}
-					local new=${BASH_REMATCH[2]}
-
-					log "$who renamed as $new"
-
-					if [[ -v state[$who] ]]; then
-						state[$new]=${state[$who]}
-						hold[$new]=${hold[$who]}
-						unset state[$who] hold[$who]
-						log "transfer the worker state to $new"
-						local id
-						for id in $(filter_keys assign $who); do
-							log "transfer the ownership of assignment $id"
-							assign[$id]=$new
-						done
-					fi
-					local id
-					for id in $(filter_keys own $who); do
-						log "transfer the ownerships of request $id and response $id"
-						own[$id]=$new
-					done
-					local item
-					for item in $(vfmt=" %s " filter_keys notify "* $who *"); do
-						log "transfer the $item subscription to $new"
-						local subscribers=(${notify[$item]})
-						erase_from subscribers $who
-						subscribers+=($new)
-						notify[$item]=${subscribers[@]}
-						news[$item-$new]=${news[$item-$who]}
-						unset news[$item-$who]
-					done
-					if contains brokers $who; then
-						erase_from brokers $who
-						brokers+=($new)
-					elif contains brokers $new; then
-						contact_brokers $new
-					fi
-					if contains workers $who; then
-						erase_from workers $who
-						workers+=($new)
-					elif contains workers $new; then
-						contact_workers $new
-					fi
+				else
+					handle_extended_input "$message"
 				fi
 
 			elif [ "$type" == "%" ]; then
-				if [[ "$info" == "protocol"* ]]; then
+				if [[ "$info" == "protocol: "* ]]; then
 					log "chat system protocol verified successfully"
-					log "register node $name on the chat system..."
-					echo "name $name"
+					log "register node${name:+ $name} on the chat system..."
+					echo "name${name:+ $name}"
 
-				elif [[ "$info" == "name"* ]]; then
-					log "registered as ${name:=${info:6}} successfully"
-					declare registered=$name
-					set_capacity ${capacity}
-					set_affinity ${affinity:-0}
-					observe_overview; observe_status
-					log "initialized, state = ${system_status[@]}"
-					[[ ${brokers[@]} ]] && contact_brokers ${brokers[@]}
-					[[ ${workers[@]} ]] && contact_workers ${workers[@]}
+				elif [[ "$info" == "name: "* ]]; then
+					name=${info:6}
+					log "registered as $name successfully"
+					if [[ ! $registered ]]; then
+						declare registered=$name
+						initialize_mode ${mode:-$(basename "$0" .sh)}
+						observe_overview; observe_status
+						log "initialized: state ${system_status[@]}"
+						foreach contact_broker ${brokers[@]}
+						foreach contact_worker ${workers[@]}
+					fi
 
-				elif [[ "$info" == "failed protocol"* ]]; then
-					log "unsupported protocol; shutdown"
-					return 1
+				elif [[ "$info" == "who: "* ]]; then
+					local online=(${info:5})
+
+					if [[ ! $registered ]]; then
+						name=$(name)
+						while contains online $name; do name=${name%-*}-$((${name##*-}+1)); done
+						log "register node${name:+ $name} on the chat system..."
+						echo "name${name:+ $name}"
+					fi
+
+					local unexpectedly=($(printf "%s\n" ${own[@]} ${!state[@]} $(<<<${!news[@]} sed -E "s/\S+-//g") | sort -u))
+					erase_from unexpectedly ${online[@]}
+
+					local who
+					for who in $(printf "%s\n" ${unexpectedly[@]} | sort -u); do
+						log "$who disconnected unexpectedly"
+						handle_node_logout $who
+					done
 
 				elif [[ "$info" == "failed name"* ]]; then
 					unset registered
-					log "name $name has been occupied, query online names..."
+					log "name${name:+ $name} has been occupied, query online names..."
 					echo "who"
 
 				elif [[ "$info" == "failed chat"* ]]; then
 					log "failed chat, check online names..."
 					echo "who"
 
-				elif [[ "$info" == "who: "* ]]; then
-					local online=(${info:5})
+				elif [[ "$info" == "failed protocol"* ]]; then
+					log "unsupported protocol; shutdown"
+					return 1
 
-					if [[ ! $registered ]]; then
-						name=${name:-node}
-						while contains online $name; do
-							name=${name%-*}-$((${name##*-}+1))
-						done
-						log "register node $name on the chat system..."
-						echo "name $name"
-					else
-						local item who
-						if (( ${#own[@]} )) && [[ ! $keep_unowned_tasks ]]; then
-							for who in $(printf "%s\n" "${own[@]}" | sort | uniq); do
-								contains online $who && continue
-								log "$who logged out silently"
-								discard_owned_assets $(filter_keys own $who)
-							done
-						fi
-						if (( ${#assign[@]} )); then
-							for who in $(printf "%s\n" "${assign[@]}" | sort | uniq); do
-								contains online $who && continue
-								log "$who logged out silently"
-								discard_workers $who
-							done
-						fi
-						for item in ${!notify[@]}; do
-							for who in ${notify[$item]}; do
-								contains online $who && continue
-								log "$who disconnected silently, unsubscribe $item for $who"
-								unsubscribe $item $who
-							done
-						done
-					fi
+				else
+					handle_extended_input "$message"
 				fi
 			fi
 
 		elif ! [ "$message" ]; then
 			local current=$(date +%s%3N)
-			local id
-			for id in ${!tmdue[@]}; do
-				local due=${tmdue[$id]}
-				if (( $current > $due )); then
-					log "request $id failed due to timeout" \
-					    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), notify ${own[$id]}"
-					local code="timeout"
-					local output=
-					res[$id]=$code:${stdout[$id]}$output
-					echo "${own[$id]} << response $id $code {$output}"
-					terminate $id
-				fi
-			done
-			local id
-			for id in ${!hdue[@]}; do
-				local due=${hdue[$id]}
-				if (( $current > $due )); then
-					queue=($id ${queue[@]})
-					log "request $id failed to be assigned" \
-					    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), queue = ($(omit ${queue[@]}))"
-					adjust_worker_state ${assign[$id]} -1
-					echo "${assign[$id]} << report state requests"
-					unset assign[$id] hdue[$id]
-				fi
-			done
-
+			check_request_timeout $current
+			check_hold_timeout $current
 			jobs >/dev/null 2>&1
 
-		else
-			handle_extended_input "$message" || log "ignore message: $message"
+		elif ! handle_extended_input "$message"; then
+			log "ignore message: $message"
 		fi
 
 		if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
 			assign_requests
 		fi
 
-		local id code output
-		while (( ${#pid[@]} )) && fetch_response; do
-			if [[ -v cmd[$id] ]] && [[ -v own[$id] ]]; then
-				if [ $code != output ]; then
-					res[$id]=$code:${stdout[$id]}$output
-					[[ -v stdin[$id] ]] && exec {stdin[$id]}>&-
-					[[ -v stdout[$id] ]] && stdout[$id]=
-					unset pid[$id] assign[$id] tmdue[$id] hdue[$id]
-				else
-					stdout[$id]+=$output\\n
-				fi
-				log "complete response $id $code {$output} and forward it to ${own[$id]}"
-				echo "${own[$id]} << response $id $code {$output}"
-			else
-				log "complete orphan response $id $code {$output}"
-			fi
-		done
+		if (( ${#pid[@]} )); then
+			fetch_responses
+		fi
 
 		refresh_observations
 	done
@@ -927,6 +750,44 @@ session() {
 
 confirm_request() {
 	local id=$1
+	return 0
+}
+
+optionalize_request() {
+	local id=$1
+	if [[ ${opts[enqueue]} == preempt ]]; then
+		local ids=() it=$id
+		for id in ${queue[@]}; do
+			[[ ${own[$id]} == $owner ]] && ids+=($it) it=$id || ids+=($id)
+		done
+		queue=(${ids[@]})
+		options+="enqueue=${opts[enqueue]} "
+	fi
+	if [[ ${opts[timeout]} == [1-9]* ]]; then
+		tmout[$id]=$(millisec ${opts[timeout]})
+		options+="timeout=${opts[timeout]} "
+	fi
+	if [[ ${opts[workers]} ]]; then
+		prefer[$id]=${opts[workers]}
+		options+="workers=${opts[workers]} "
+	fi
+	if [[ -v opts[input] ]]; then
+		stdin[$id]=
+		options+="input "
+	fi
+	if [[ -v opts[output] ]]; then
+		stdout[$id]=
+		options+="output "
+	fi
+	return 0
+}
+
+initialize_request() {
+	local id=$1
+	unset res[$id]
+	[[ -v stdin[$id] ]] && stdin[$id]=
+	[[ -v stdout[$id] ]] && stdout[$id]=
+	[[ -v tmout[$id] ]] && tmdue[$id]=$(($(date +%s%3N)+tmout[$id]))
 	return 0
 }
 
@@ -973,6 +834,7 @@ assign_requests() {
 
 			echo "$worker << request $request"
 			adjust_worker_state $worker +1
+			hold[$worker]=$((hold[$worker]+1))
 			assign[$id]=$worker
 			hdue[$id]=$(($(date +%s%3N)+${hold_timeout:-1000}*${hold[$worker]}))
 			erase_from queue $id
@@ -981,7 +843,6 @@ assign_requests() {
 
 		elif execute_request $id; then
 			adjust_worker_state $worker +1
-			hold[$worker]=$((hold[$worker]-1))
 			assign[$id]=$worker
 			erase_from queue $id
 			log "execute request $id at $worker," \
@@ -1012,14 +873,13 @@ sort_idle_workers() {
 }
 
 adjust_worker_state() {
-	local worker=$1 adjust=$2 stat load size
-	load=${state[$worker]:5}
-	load=(${load/\// })
-	size=${load[1]}
+	local worker=${1?} adjust=${2?} stat load size
+	stat=${state[$worker]:5}
+	load=${stat%/*}
+	size=${stat#*/}
 	load=$((load + adjust))
 	(( load < size )) && stat=idle || stat=busy
 	state[$worker]=$stat:$load/$size
-	hold[$worker]=$((hold[$worker] + adjust))
 }
 
 execute_request() {
@@ -1068,6 +928,27 @@ format_output() {
 		sed -z 's/\\/\\\\/g' | sed -z 's/\t/\\t/g' | sed -z 's/\n/\\n/g' | tr -d '[:cntrl:]'
 }
 
+fetch_responses() {
+	local id code output
+	while (( ${#pid[@]} )) && fetch_response; do
+		if [[ -v cmd[$id] ]] && [[ -v own[$id] ]]; then
+			if [ $code != output ]; then
+				res[$id]=$code:${stdout[$id]}$output
+				[[ -v stdin[$id] ]] && exec {stdin[$id]}>&- && stdin[$id]=
+				[[ -v stdout[$id] ]] && stdout[$id]=
+				unset pid[$id] assign[$id] tmdue[$id]
+				adjust_worker_state $name -1
+			else
+				stdout[$id]+=$output\\n
+			fi
+			log "complete response $id $code {$output} and forward it to ${own[$id]}"
+			echo "${own[$id]} << response $id $code {$output}"
+		else
+			log "complete orphan response $id $code {$output}"
+		fi
+	done
+}
+
 fetch_response() {
 	local response
 	read -r -t 0 -u ${res_fd} && IFS= read -r -u ${res_fd} response || return $?
@@ -1078,32 +959,42 @@ fetch_response() {
 }
 
 terminate() {
-	local id
-	for id in $@; do
-		if [[ -v pid[$id] ]]; then
-			if kill_request $id; then
-				log "request $id has been terminated successfully"
-			fi
-		elif [[ -v assign[$id] ]]; then
-			[[ -v hdue[$id] ]] && adjust_worker_state ${assign[$id]} -1
-			echo "${assign[$id]} << terminate $id"
-			log "forward terminate $id to ${assign[$id]}"
+	local id=$1
+	if [[ -v pid[$id] ]]; then
+		[[ -v state[$name] ]] && adjust_worker_state $name -1
+		kill_request $id
+		log "request $id has been terminated"
+		unset assign[$id] pid[$id]
+		return 0
+
+	elif [[ -v assign[$id] ]]; then
+		local worker=${assign[$id]}
+		if [[ -v state[$worker] ]]; then
+			adjust_worker_state $worker -1
+			echo "$worker << terminate $id"
+			log "forward terminate $id to $worker"
 		fi
-		[[ -v stdin[$id] ]] && stdin[$id]=
-		[[ -v stdout[$id] ]] && stdout[$id]=
-		unset pid[$id] assign[$id] tmdue[$id] hdue[$id]
-	done
-	erase_from queue $@
+		if [[ -v hdue[$id] ]] && [[ -v hold[$worker] ]]; then
+			hold[$worker]=$((hold[$worker]-1))
+		fi
+		unset assign[$id] hdue[$id]
+		return 0
+
+	elif contains queue $id; then
+		erase_from queue $id
+		return 0
+
+	else
+		return 1
+	fi
 }
 
 kill_request() {
-	local id code=0
-	for id in $@; do
-		kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null
-		code=$(($?|code))
-		[[ -v stdin[$id] ]] && exec {stdin[$id]}>&-
-		[[ -v stdout[$id] ]] && stdout[$id]=
-	done
+	local id=${1:-x}
+	kill ${pid[$id]} $(cmdpidof $id) 2>/dev/null
+	local code=$?
+	unset pid[$id]
+	[[ -v stdin[$id] ]] && exec {stdin[$id]}>&-
 	return $code
 }
 
@@ -1111,70 +1002,101 @@ cmdpidof() {
 	{ pgrep -P $(pgrep -P ${pid[$1]}); } 2>/dev/null
 }
 
-app() {
-	local app=$1
-	[[ $app ]] || return 127
-	local app_home="${app_home:-.cache/worker}/$app"
-	pushd "$app_home" >/dev/null 2>&1
-	if [ $? != 0 ]; then # get app package from repo...
-		local app_repo=$(realpath -q "${app_repo:-.}" || echo "${app_repo}")
-		mkdir -p "$app_home"
-		pushd "$app_home" >/dev/null 2>&1 || return 128
-		local fmt
-		for fmt in ".tar.xz" ".tar.gz" ".zip" ""; do
-			pkg-get "${app_repo}/${app}${fmt}" && break
-		done 2>/dev/null
-		if [ $? != 0 ]; then # app package not found
-			popd >/dev/null 2>&1
-			rm -r "$app_home"
-			return -1
-		elif [ -e setup.sh ]; then
-			bash setup.sh 2>&1 >setup.log
+check_request_timeout() {
+	local current=$1 id
+	for id in ${!tmdue[@]}; do
+		local due=${tmdue[$id]}
+		if (( $current > $due )); then
+			log "request $id failed due to timeout" \
+			    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), notify ${own[$id]}"
+			local code="timeout"
+			local output=
+			res[$id]=$code:${stdout[$id]}$output
+			echo "${own[$id]} << response $id $code {$output}"
+			terminate $id
+			unset tmdue[$id]
 		fi
-	fi
-	local code
-	eval "${@:2}"
-	code=$?
-	popd >/dev/null 2>&1
-	return $code
-}
-
-pkg-get() {
-	local pkg=$1
-	[[ $pkg ]] || return 127
-	pkg=$(realpath -q "$pkg" || echo "$pkg")
-	local tmp=$(mktemp -d -p .)
-	pushd $tmp >/dev/null || return 128
-	local code=0
-	if [[ $pkg != http* ]]; then
-		rsync -aq "$pkg" .
-	else
-		curl -OJRfs "$pkg"
-	fi
-	code=$(($?|code))
-	popd >/dev/null
-	if [ $code == 0 ]; then
-		unpack $tmp/*
-		code=$(($?|code))
-	fi
-	rm -r $tmp
-	return $code
-}
-
-unpack() {
-	local code=0 pkg
-	for pkg in "$@"; do
-		case "${pkg,,}" in
-		*.tar.xz|*.txz)	tar Jxf "$pkg"; ;;
-		*.tar.gz|*.tgz)	tar zxf "$pkg"; ;;
-		*.tar)	tar xf "$pkg"; ;;
-		*.xz)	xz -kd "$pkg"; ;;
-		*.gz)	gzip -kd "$pkg"; ;;
-		*.zip)	unzip -q -o "$pkg"; ;;
-		*.7z)	7za x -y "$pkg" >/dev/null; ;;
-		esac; code=$(($?|code))
 	done
-	return $code
+}
+
+check_hold_timeout() {
+	local current=$1 id
+	for id in ${!hdue[@]}; do
+		local due=${hdue[$id]}
+		if (( $current > $due )); then
+			queue=($id ${queue[@]})
+			log "request $id failed to be assigned" \
+			    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), queue = ($(omit ${queue[@]}))"
+			local worker=${assign[$id]}
+			adjust_worker_state $worker -1
+			hold[$worker]=$((hold[$worker]-1))
+			echo "$worker << report state requests"
+			unset assign[$id] hdue[$id]
+		fi
+	done
+}
+
+operate_eval() { # required variables: who options
+	local output code lines
+	output=$(eval "$options" 2>&1)
+	code=$?
+	lines=$((${#output} ? $(<<<$output wc -l) : 0))
+	echo "$who << result shell {$options} return $code ($lines)"
+	echo -n "$output" | xargs -r -d'\n' -L1 echo "$who << #"
+}
+
+set_config() {
+	local var=$1
+	local val=$2
+	local show_val="$var[@]"
+	local val_old="${!show_val}"
+	eval $var="\"$val\""
+	configs+=($var)
+
+	if [ "$var" == "name" ]; then
+		log "node name has been changed, register${name:+ $name} on the chat system..."
+		echo "name${name:+ $name}"
+	elif [ "$var" == "brokers" ] || [ "$var" == "broker" ]; then
+		brokers=${!var}; brokers=(${brokers//:/ })
+		change_brokers "$val_old" "${brokers[@]}"
+		erase_from configs brokers broker; configs+=(brokers)
+	elif [ "$var" == "workers" ] || [ "$var" == "worker" ]; then
+		workers=${!var}; workers=(${workers//:/ })
+		change_workers "$val_old" "${workers[@]}"
+		erase_from configs workers worker; configs+=(workers)
+	elif [ "$var" == "capacity" ] || [ "$var" == "affinity" ]; then
+		set_${var} ${!var}
+	elif [ "$var" == "plugins" ]; then
+		xargs_eval -d: source {} >/dev/null <<< $plugins
+	fi
+
+	return 0
+}
+
+unset_config() {
+	local var=$1
+	local show_val="$var[@]"
+	local val_old="${!show_val}"
+	eval $var=
+	erase_from configs $var
+
+	if [ "$var" == "name" ]; then
+		name=$(name)
+		log "node name has been changed, register${name:+ $name} on the chat system..."
+		echo "name${name:+ $name}"
+	elif [ "$var" == "brokers" ] || [ "$var" == "broker" ]; then
+		brokers=()
+		foreach discard_broker $val_old
+		erase_from configs brokers broker
+	elif [ "$var" == "workers" ] || [ "$var" == "worker" ]; then
+		workers=()
+		foreach discard_worker $val_old
+		erase_from configs workers worker
+	elif [ "$var" == "capacity" ] || [ "$var" == "affinity" ]; then
+		set_${var} 0
+	fi
+
+	return 0
 }
 
 set_capacity() {
@@ -1190,8 +1112,24 @@ set_affinity() {
 		(( load < affinity )) && stat=idle || stat=busy
 		state[$name]=$stat:$load/$affinity
 	elif [[ -v state[$name] ]]; then
-		discard_workers $name
+		discard_worker $name
 	fi
+}
+
+initialize_mode() {
+	local mode=$1
+	if [[ $mode == broker ]]; then
+		contains configs affinity || affinity=
+	elif [[ $mode == worker ]]; then
+		contains configs capacity || capacity=
+		if ! contains configs affinity; then
+			{ affinity=$capacity; } 2>/dev/null
+			(( affinity )) || affinity=$(nproc)
+			capacity=
+		fi
+	fi
+	set_capacity ${capacity}
+	set_affinity ${affinity:-0}
 }
 
 observe_overview() {
@@ -1290,76 +1228,6 @@ refresh_observations() {
 	fi
 }
 
-discard_owned_assets() {
-	local id
-	for id in $@; do
-		if [[ -v res[$id] ]]; then
-			log "discard request $id and response $id"
-		else
-			log "discard request $id"
-		fi
-		terminate $id
-		unset cmd[$id] own[$id] res[$id] tmout[$id] prefer[$id] stdin[$id] stdout[$id]
-	done
-}
-
-change_brokers() {
-	local current=($1) pending=($2)
-	local added=(${pending[@]}) removed=(${current[@]})
-	erase_from added ${current[@]}
-	erase_from removed ${pending[@]}
-	log "confirm brokers change: (${current[@]}) --> (${pending[@]})"
-	[[ ${removed[@]} ]] && discard_brokers ${removed[@]}
-	[[ ${added[@]} ]] && contact_brokers ${added[@]}
-	brokers=(${pending[@]})
-}
-
-change_workers() {
-	local current=($1) pending=($2)
-	local added=(${pending[@]}) removed=(${current[@]})
-	erase_from added ${current[@]}
-	erase_from removed ${pending[@]}
-	log "confirm workers change: (${current[@]}) --> (${pending[@]})"
-	[[ ${removed[@]} ]] && discard_workers ${removed[@]}
-	[[ ${added[@]} ]] && contact_workers ${added[@]}
-	workers=(${pending[@]})
-}
-
-contact_brokers() {
-	local handshake=($@)
-	erase_from handshake ${notify[state]} $name
-	if [[ ${handshake[@]} ]]; then
-		log "contact ${handshake[@]} for handshake (protocol 0)"
-		printf "%s << use protocol 0\n" "${handshake[@]}"
-	fi
-}
-
-contact_workers() {
-	local contact=($@)
-	erase_from contact $name
-	if [[ ${contact[@]} ]]; then
-		log "contact ${contact[@]} for worker state"
-		printf "%s << report state\n" "${contact[@]}"
-	fi
-}
-
-discard_brokers() {
-	unsubscribe state "$@"
-}
-
-discard_workers() {
-	local worker ids id
-	for worker in "$@"; do
-		unset state[$worker] hold[$worker]
-		log "discard the worker state of $worker"
-		ids=$(filter_keys assign $worker)
-		[[ $ids ]] || continue
-		terminate $ids
-		queue=($ids ${queue[@]})
-		log "revoke assigned request $ids, queue = ($(omit ${queue[@]}))"
-	done
-}
-
 notify_assign_request() {
 	local id=$1 who=$2
 	if [[ -v news[assign-${own[$id]}] ]]; then
@@ -1373,30 +1241,251 @@ notify_assign_request() {
 }
 
 subscribe() {
-	local item=${1:-null} who
-	for who in ${@:2}; do
-		local subscribers=(${notify[$item]})
-		erase_from subscribers $who
-		subscribers+=($who)
-		notify[$item]=${subscribers[@]}
-		news[$item-$who]=subscribe
-	done
+	local item=${1:-null} who=${2?}
+	local subscribers=(${notify[$item]})
+	erase_from subscribers $who
+	subscribers+=($who)
+	notify[$item]=${subscribers[@]}
+	news[$item-$who]=subscribe
 }
 
 unsubscribe() {
-	local item=${1:-null} who
-	for who in ${@:2}; do
-		local subscribers=(${notify[$item]})
-		erase_from subscribers $who
-		notify[$item]=${subscribers[@]}
-		[[ ${notify[$item]} ]] || unset notify[$item]
-		unset news[$item-$who]
+	local item=${1:-null} who=${2?}
+	local subscribers=(${notify[$item]})
+	erase_from subscribers $who
+	notify[$item]=${subscribers[@]}
+	[[ ${notify[$item]} ]] || unset notify[$item]
+	unset news[$item-$who]
+}
+
+change_brokers() {
+	local current=($1) pending=($2)
+	erase_from pending $name
+	local added=(${pending[@]}) removed=(${current[@]})
+	erase_from added ${current[@]}
+	erase_from removed ${pending[@]}
+	log "confirm brokers change: (${current[@]}) --> (${pending[@]})"
+	foreach discard_broker ${removed[@]}
+	foreach contact_broker ${added[@]}
+	brokers=(${pending[@]})
+}
+
+change_workers() {
+	local current=($1) pending=($2)
+	if [[ -v state[$name] ]]; then
+		erase_from current $name
+		current+=($name)
+	fi
+	local added=(${pending[@]}) removed=(${current[@]})
+	erase_from added ${current[@]}
+	erase_from removed ${pending[@]}
+	log "confirm workers change: (${current[@]}) --> (${pending[@]})"
+	foreach discard_worker ${removed[@]}
+	foreach contact_worker ${added[@]}
+	workers=(${pending[@]})
+}
+
+contact_broker() {
+	local broker=${1?}
+	if [[ $broker != $name ]]; then
+		log "contact $broker for handshake (protocol 0)"
+		echo "$broker << use protocol 0"
+	fi
+}
+
+contact_worker() {
+	local worker=${1?}
+	if [[ $worker != $name ]]; then
+		log "contact $worker for worker state"
+		echo "$worker << report state"
+	else
+		[[ -v state[$name] ]] || set_affinity $affinity
+		[[ -v state[$name] ]] && log "contact local worker, state ${state[$name]/:/ }" || \
+			log "unable to contact local worker"
+	fi
+}
+
+discard_broker() {
+	local broker=${1?}
+	log "discard broker: $broker"
+	unsubscribe state "$broker"
+}
+
+discard_worker() {
+	local worker=${1?}
+	log "discard worker: $worker"
+	local ids=$(filter_keys assign $worker)
+	foreach terminate $ids
+	unset state[$worker] hold[$worker]
+	queue=($ids ${queue[@]})
+	[[ $ids ]] && log "revoke assigned request $ids, queue = ($(omit ${queue[@]}))"
+}
+
+discard_assets() {
+	local id=${1?}
+	log "discard assets: $id"
+	terminate $id
+	unset cmd[$id] own[$id] res[$id] tmout[$id] tmdue[$id] prefer[$id] stdin[$id] stdout[$id]
+}
+
+handle_node_login() {
+	local who=$1
+	cpfx log log_src
+	log() {
+		cpfx log_src log
+		log "node $who logged in"
+		log "$@"
+	}
+	contains brokers $who && log "broker $who connected" && contact_broker $who
+	contains workers $who && log "worker $who connected" && contact_worker $who
+	mvfx log_src log
+}
+
+handle_node_logout() {
+	local who=$1
+	cpfx log log_src
+	log() {
+		cpfx log_src log
+		log "node $who logged out"
+		log "$@"
+	}
+	contains brokers $who && log "broker $who disconnected, wait until $who come back..."
+	contains workers $who && log "worker $who disconnected, wait until $who come back..."
+
+	[[ -v state[$who] ]] && unset state[$who] && discard_worker $who
+	[[ -v news[state-$who] ]] && discard_broker $who
+
+	local item
+	for item in $(vfmt=" %s " filter_keys notify "* $who *"); do
+		log "unsubscribe $item for $who"
+		unsubscribe $item $who
 	done
+
+	if contains own $who && [[ ! ${keep_unowned_tasks} ]]; then
+		foreach discard_assets $(filter_keys own $who)
+	fi
+	mvfx log_src log
+}
+
+handle_node_rename() {
+	local who=$1 new=$2
+	cpfx log log_src
+	log() {
+		cpfx log_src log
+		log "node $who renamed as $new"
+		log "$@"
+	}
+
+	if contains brokers $who; then
+		log "broker $who renamed as $new"
+		erase_from brokers $who; brokers+=($new)
+	elif contains brokers $new; then
+		log "broker $new connected"
+		contact_broker $new
+	fi
+	if contains workers $who; then
+		log "worker $who renamed as $new"
+		erase_from workers $who; workers+=($new)
+	elif contains workers $new; then
+		log "worker $new connected"
+		contact_worker $new
+	fi
+
+	if [[ -v state[$who] ]]; then
+		log "transfer worker state: $who -> $new"
+		state[$new]=${state[$who]}
+		hold[$new]=${hold[$who]}
+		unset state[$who] hold[$who]
+		local id
+		for id in $(filter_keys assign $who); do
+			assign[$id]=$new
+		done
+	fi
+
+	local id
+	for id in $(filter_keys own $who); do
+		log "transfer ownership $id: $who -> $new"
+		own[$id]=$new
+	done
+
+	local item
+	for item in $(vfmt=" %s " filter_keys notify "* $who *"); do
+		log "transfer subscription $item: $who -> $new"
+		unsubscribe $item $who
+		subscribe $item $new
+	done
+	mvfx log_src log
 }
 
 handle_extended_input() {
 	local message=$1
 	return 1
+}
+
+app() {
+	local app=$1
+	[[ $app ]] || return 127
+	local app_home="${app_home:-.cache/worker}/$app"
+	pushd "$app_home" >/dev/null 2>&1
+	if [ $? != 0 ]; then # get app package from repo...
+		local app_repo=$(realpath -q "${app_repo:-.}" || echo "${app_repo}")
+		mkdir -p "$app_home"
+		pushd "$app_home" >/dev/null 2>&1 || return 128
+		local fmt
+		for fmt in ".tar.xz" ".tar.gz" ".zip" ""; do
+			pkg-get "${app_repo}/${app}${fmt}" && break
+		done 2>/dev/null
+		if [ $? != 0 ]; then # app package not found
+			popd >/dev/null 2>&1
+			rm -r "$app_home"
+			return -1
+		elif [ -e setup.sh ]; then
+			bash setup.sh 2>&1 >setup.log
+		fi
+	fi
+	local code
+	eval "${@:2}"
+	code=$?
+	popd >/dev/null 2>&1
+	return $code
+}
+
+pkg-get() {
+	local pkg=$1
+	[[ $pkg ]] || return 127
+	pkg=$(realpath -q "$pkg" || echo "$pkg")
+	local tmp=$(mktemp -d -p .)
+	pushd $tmp >/dev/null || return 128
+	local code=0
+	if [[ $pkg != http* ]]; then
+		rsync -aq "$pkg" .
+	else
+		curl -OJRfs "$pkg"
+	fi
+	code=$(($?|code))
+	popd >/dev/null
+	if [ $code == 0 ]; then
+		unpack $tmp/*
+		code=$(($?|code))
+	fi
+	rm -r $tmp
+	return $code
+}
+
+unpack() {
+	local code=0 pkg
+	for pkg in "$@"; do
+		case "${pkg,,}" in
+		*.tar.xz|*.txz)	tar Jxf "$pkg"; ;;
+		*.tar.gz|*.tgz)	tar zxf "$pkg"; ;;
+		*.tar)	tar xf "$pkg"; ;;
+		*.xz)	xz -kd "$pkg"; ;;
+		*.gz)	gzip -kd "$pkg"; ;;
+		*.zip)	unzip -q -o "$pkg"; ;;
+		*.7z)	7za x -y "$pkg" >/dev/null; ;;
+		esac; code=$(($?|code))
+	done
+	return $code
 }
 
 millisec() {
@@ -1430,7 +1519,7 @@ init_system_io() {
 			return 14
 		fi
 	fi
-	if [[ ${res_fd} ]] || { exec {res_fd}<> <(:); } 2>/dev/null; then
+	if { exec {res_fd}<> <(:); } 2>/dev/null; then
 		log "initialized response pipe successfully"
 	else
 		log "failed to initialize response pipe"
@@ -1512,15 +1601,33 @@ retain_from() {
 }
 
 override() {
-	eval "local level=${1}_override_level"
-	eval "$(echo "${1}_override_$((level))()"; declare -f ${1} | tail -n +2)" 2>/dev/null
-	eval "${1}_override_level=$((level+1))"
+	local -n level=${1}_override_level
+	cpfx ${1} ${1}_override_$((level++))
+	[[ ${2} ]] && cpfx ${2} ${1}
 }
 
 invoke_overridden() {
-	eval "local level=${invoke_level:-${1}_override_level}"
+	local level=${invoke_level:-${1}_override_level}
 	(( level-- )) || return 255
 	invoke_level=$level ${1}_override_$level "${@:2}"
+}
+
+undo_override() {
+	local -n level=${1}_override_level
+	(( level )) || return 255
+	mvfx ${1}_override_$((--level)) ${1}
+}
+
+cpfx() { local fx; fx=$(declare -f ${1?}) && eval "${fx/$1/${2?}}"; }
+
+rmfx() { unset -f $@; }
+
+mvfx() { cpfx $1 $2 && rmfx $1; }
+
+foreach() {
+	local run=$1 code=0 arg
+	for arg in "${@:2}"; do $run "$arg"; code=$((code|$?)); done
+	return $code
 }
 
 xargs_eval() {
@@ -1584,16 +1691,17 @@ envinfo() {
 	echo "RAM: $(printf %.1fG $size)"
 }
 
+name() { echo ${name:-$(basename "$0" .sh)}; }
+
 log() {
-	name=${name:-$(basename "${0%.sh}")}
-	logfile=${logfile:-${name}_$(date '+%Y%m%d_%H%M%S_%3N').log}
+	logfile=${logfile:-$(name)_$(date '+%Y%m%d_%H%M%S_%3N').log}
 	if exec 3>> "$logfile" && flock -xn 3; then
 		trap 'code=$?; flock -u 3; exit $code' EXIT
 		exec 2> >(trap '' INT TERM; exec tee /dev/fd/2 >&3)
 	fi
-	trap 'log "${name:-node} has been interrupted"; exit 64' INT
-	trap 'log "${name:-node} has been terminated"; exit 64' TERM
-	trap 'code=$?; cleanup; log "${name:-node} is terminated"; exit $code' EXIT
+	trap 'log "$(name) has been interrupted"; exit 64' INT
+	trap 'log "$(name) has been terminated"; exit 64' TERM
+	trap 'code=$?; cleanup; log "$(name) is terminated"; exit $code' EXIT
 
 	log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
 	log "$@"
