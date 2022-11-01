@@ -616,7 +616,7 @@ session() {
 					if [[ $what == "plugin" ]] && [[ :$plugins: != *:$plug:* ]]; then
 						plugins+=${plugins:+:}$plug
 						log "confirm set plugins=\"$plugins\""
-						configs+=("plugins")
+						contains configs plugins || configs+=(plugins)
 					fi
 
 				elif [[ "$options" == "shell "* ]]; then
@@ -1051,7 +1051,7 @@ set_config() {
 	local show_val="$var[@]"
 	local val_old="${!show_val}"
 	eval $var="\"$val\""
-	configs+=($var)
+	contains configs $var || configs+=($var)
 
 	if [ "$var" == "name" ]; then
 		log "node name has been changed, register${name:+ $name} on the chat system..."
@@ -1059,11 +1059,11 @@ set_config() {
 	elif [ "$var" == "brokers" ] || [ "$var" == "broker" ]; then
 		brokers=${!var}; brokers=(${brokers//:/ })
 		change_brokers "$val_old" "${brokers[@]}"
-		erase_from configs brokers broker; configs+=(brokers)
+		erase_from configs brokers broker; contains configs brokers || configs+=(brokers)
 	elif [ "$var" == "workers" ] || [ "$var" == "worker" ]; then
 		workers=${!var}; workers=(${workers//:/ })
 		change_workers "$val_old" "${workers[@]}"
-		erase_from configs workers worker; configs+=(workers)
+		erase_from configs workers worker; contains configs workers || configs+=(workers)
 	elif [ "$var" == "capacity" ] || [ "$var" == "affinity" ]; then
 		set_${var} ${!var}
 	elif [ "$var" == "plugins" ]; then
