@@ -13,9 +13,9 @@ main() {
 	declare logfile=${logfile}
 
 	log "chat::node version 2022-10-31 (protocol 0)"
-	args_of "${configs[@]}" | xargs_eval log "option:"
+	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
-	xargs_eval -d: source {} >/dev/null <<< $plugins
+	foreach source ${plugins//:/ } >/dev/null
 
 	declare -A own # [id]=owner
 	declare -A cmd # [id]=command
@@ -612,7 +612,7 @@ session() {
 					local plug=${options:7}
 					log "accept operate $what $plug from $who"
 					echo "$who << confirm $what $plug"
-					source $plug >/dev/null 2>&1
+					source $plug >/dev/null
 					if [[ $what == "plugin" ]] && [[ :$plugins: != *:$plug:* ]]; then
 						plugins+=${plugins:+:}$plug
 						log "confirm set plugins=\"$plugins\""
@@ -1067,7 +1067,7 @@ set_config() {
 	elif [ "$var" == "capacity" ] || [ "$var" == "affinity" ]; then
 		set_${var} ${!var}
 	elif [ "$var" == "plugins" ]; then
-		xargs_eval -d: source {} >/dev/null <<< $plugins
+		foreach source ${plugins//:/ } >/dev/null
 	fi
 
 	return 0
