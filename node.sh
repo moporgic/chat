@@ -54,9 +54,11 @@ session() {
 	declare -a size_details=() # [A]=4 [B]=16 ...
 	declare -a load_details=() # [A]=2/4 [B]=8/16 ...
 	declare -a stat_details=() # [A]=idle:2/4 [B]=idle:8/16 ...
+
 	declare registered
 
-	init_session
+	log "verify chat system protocol 0..."
+	echo "protocol 0"
 
 	local message
 	local from content handle
@@ -80,176 +82,8 @@ session() {
 		fi
 	done
 
-	log "message input is terminated, chat system is down?"
+	log "message input terminated unexpectedly"
 	return 16
-}
-
-init_session() {
-	log "verify chat system protocol 0..."
-	echo "protocol 0"
-}
-
-complete_input() {
-	if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
-		assign_requests
-	fi
-	if (( ${#pid[@]} )); then
-		fetch_responses
-	fi
-	refresh_observations
-}
-
-handle_notify_input() { # ^notify state (idle|busy|full) (\S+)/(\S+)( \((.*)\))?$
-	local label what stat load size owned worker=$2
-	IFS=' ' read -r label what stat load size owned <<< "${1/\// }" || return 1
-
-	[ "$label $what" == "notify state" ] || return 1
-
-	if [[ $stat == idle || $stat == busy || $stat == full ]] && [[ ${load:-x}${size:-x} != *[^0-9]* ]]; then
-		echo "$worker << confirm state $stat $load/$size"
-
-		if (( ! hold[$worker] )); then
-			log "confirm that $worker state $stat $load/$size"
-			state[$worker]=$stat:$load/$size
-		else
-			load=$((load + hold[$worker]))
-			(( load < size )) && stat="idle" || stat="busy"
-			log "confirm that $worker state $stat $load/$size (${hold[$worker]} hold)"
-			state[$worker]=$stat:$load/$size
-		fi
-
-		if [[ $owned ]]; then
-			local ids=($(filter_keys assign $worker))
-			erase_from ids ${owned:1:-1} ${!hdue[@]}
-			if [[ ${ids[@]} ]]; then
-				queue=(${ids[@]} ${queue[@]})
-				log "confirm that $worker disowned request ${ids[@]}, queue = ($(omit ${queue[@]}))"
-			fi
-		fi
-
-	else
-		log "ignore incorrect state $stat $load/$size"
-		return 1
-	fi
-
-	return 0
-}
-
-handle_accept_input() {
-	handle_confirm_input "$@"
-}
-
-handle_reject_input() {
-	handle_confirm_input "$@"
-}
-
-handle_confirm_input() { # ^(accept|reject|confirm) (\S+) (.+)$
-	local confirm what option
-	IFS=' ' read -r confirm what option <<< $1 || return 1
-	local id=$option
-	local who=$2
-
-	if [ "$what" == "state" ]; then
-		log "confirm that $who ${confirm}ed state $option"
-
-	elif [ "$what" == "request" ]; then
-		local ids=()
-		if [[ ${assign[$id]} == $who ]] && [[ -v hdue[$id] ]]; then
-			ids=($id)
-		elif [[ $id == *[^0-9]* ]]; then
-			ids=($(<<<$id xargs_eval -d' ' "filter_keys assign \"{}\" $who" | sort -nu))
-			retain_from ids ${!hdue[@]}
-		fi
-		if [[ ${ids[@]} ]] && [ "$confirm" == "accept" ]; then
-			hold[$who]=$((hold[$who]-${#ids[@]}))
-			log "confirm that $who ${confirm}ed $what ${ids[@]}"
-			for id in ${ids[@]}; do
-				unset hdue[$id]
-				notify_assign_request $id $who
-			done
-		elif [[ ${ids[@]} ]] && [ "$confirm" == "reject" ]; then
-			for id in ${ids[@]}; do
-				unset hdue[$id] assign[$id]
-			done
-			adjust_worker_state $who -${#ids[@]}
-			hold[$who]=$((hold[$who]-${#ids[@]}))
-			queue=(${ids[@]} ${queue[@]})
-			log "confirm that $who ${confirm}ed $what ${ids[@]}, queue = ($(omit ${queue[@]}))"
-		elif [[ -v stdin[$id] ]] && [ "$confirm" == "confirm" ]; then
-			log "confirm that $who ${confirm}ed $what $id input"
-		else
-			log "ignore that $who ${confirm}ed $what $id since no such $what"
-		fi
-
-	elif [ "$what" == "response" ]; then
-		local ids=()
-		if [[ ${own[$id]} == $who ]] && [[ -v res[$id] ]]; then
-			ids=($id)
-		elif [[ $id == *[^0-9]* ]]; then
-			ids=($(<<<$id xargs_eval -d' ' "filter_keys own \"{}\" $who" | sort -nu))
-			retain_from ids ${!res[@]}
-		fi
-		if [[ ${ids[@]} ]] && [ "$confirm" == "accept" ]; then
-			for id in ${ids[@]}; do
-				unset res[$id] cmd[$id] own[$id] tmout[$id] prefer[$id] stdin[$id] stdout[$id]
-			done
-			log "confirm that $who ${confirm}ed $what ${ids[@]}"
-		elif [[ ${ids[@]} ]] && [ "$confirm" == "reject" ]; then
-			queue+=(${ids[@]})
-			for id in ${ids[@]}; do
-				if confirm_request $id && initialize_request $id; then
-					echo "$who << accept request $id"
-				else
-					echo "$who << reject request $id"
-					erase_from queue $id
-				fi
-			done
-			log "confirm that $who ${confirm}ed $what ${ids[@]}, queue = ($(omit ${queue[@]}))"
-		elif [[ -v stdout[$id] ]] && [ "$confirm" == "confirm" ]; then
-			log "confirm that $who ${confirm}ed $what $id output"
-		else
-			log "ignore that $who ${confirm}ed $what $id since no such $what"
-		fi
-
-	elif [ "$what" == "terminate" ]; then
-		local ids=() ida=()
-		if [[ ! -v assign[$id] ]]; then
-			ids=($id)
-		elif [[ ${assign[$id]} == $who ]]; then
-			ids=($id)
-			ida=($id)
-		elif [[ $id == *[^0-9]* ]]; then
-			ids=($(<<<$id xargs_eval -d' ' "filter_keys assign \"{}\" $who" | sort -nu))
-			ida=(${ids[@]})
-		fi
-		if [[ ${ida[@]} ]] && ([ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]); then
-			for id in ${ida[@]}; do unset assign[$id]; done
-			queue=(${ida[@]} ${queue[@]})
-			log "confirm that $who ${confirm}ed $what ${ids[@]}, queue = ($(omit ${queue[@]}))"
-		elif [[ ${ids[@]} ]]; then
-			log "confirm that $who ${confirm}ed $what ${ids[@]}"
-		else
-			log "ignore that $who ${confirm}ed $what $id since no such $what"
-		fi
-
-	elif [ "$what" == "protocol" ]; then
-		if [ "$confirm" == "accept" ]; then
-			log "handshake with $who successfully"
-			subscribe state $who
-			log "subscribed state for new broker $who"
-			observe_state
-			echo "$who << notify state ${system_state[@]}"
-		elif [ "$confirm" == "reject" ]; then
-			log "handshake failed, unsupported protocol; shutdown"
-			exit_code=2
-			return 255
-		fi
-
-	else
-		return 1
-	fi
-
-	return 0
 }
 
 handle_request_input() { # ^request (([0-9]+) )?(\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$
@@ -386,6 +220,159 @@ handle_terminate_input() { # ^terminate (.+)$
 	fi
 
 	return 0
+}
+
+handle_notify_input() { # ^notify state (idle|busy|full) (\S+)/(\S+)( \((.*)\))?$
+	local label what stat load size owned worker=$2
+	IFS=' ' read -r label what stat load size owned <<< "${1/\// }" || return 1
+
+	[ "$label $what" == "notify state" ] || return 1
+
+	if [[ $stat == idle || $stat == busy || $stat == full ]] && [[ ${load:-x}${size:-x} != *[^0-9]* ]]; then
+		echo "$worker << confirm state $stat $load/$size"
+
+		if (( ! hold[$worker] )); then
+			log "confirm that $worker state $stat $load/$size"
+			state[$worker]=$stat:$load/$size
+		else
+			load=$((load + hold[$worker]))
+			(( load < size )) && stat="idle" || stat="busy"
+			log "confirm that $worker state $stat $load/$size (${hold[$worker]} hold)"
+			state[$worker]=$stat:$load/$size
+		fi
+
+		if [[ $owned ]]; then
+			local ids=($(filter_keys assign $worker))
+			erase_from ids ${owned:1:-1} ${!hdue[@]}
+			if [[ ${ids[@]} ]]; then
+				queue=(${ids[@]} ${queue[@]})
+				log "confirm that $worker disowned request ${ids[@]}, queue = ($(omit ${queue[@]}))"
+			fi
+		fi
+
+	else
+		log "ignore incorrect state $stat $load/$size"
+		return 1
+	fi
+
+	return 0
+}
+
+handle_confirm_input() { # ^(accept|reject|confirm) (\S+) (.+)$
+	local confirm what option
+	IFS=' ' read -r confirm what option <<< $1 || return 1
+	local id=$option
+	local who=$2
+
+	if [ "$what" == "state" ]; then
+		log "confirm that $who ${confirm}ed state $option"
+
+	elif [ "$what" == "request" ]; then
+		local ids=()
+		if [[ ${assign[$id]} == $who ]] && [[ -v hdue[$id] ]]; then
+			ids=($id)
+		elif [[ $id == *[^0-9]* ]]; then
+			ids=($(<<<$id xargs_eval -d' ' "filter_keys assign \"{}\" $who" | sort -nu))
+			retain_from ids ${!hdue[@]}
+		fi
+		if [[ ${ids[@]} ]] && [ "$confirm" == "accept" ]; then
+			hold[$who]=$((hold[$who]-${#ids[@]}))
+			log "confirm that $who ${confirm}ed $what ${ids[@]}"
+			for id in ${ids[@]}; do
+				unset hdue[$id]
+				notify_assign_request $id $who
+			done
+		elif [[ ${ids[@]} ]] && [ "$confirm" == "reject" ]; then
+			for id in ${ids[@]}; do
+				unset hdue[$id] assign[$id]
+			done
+			adjust_worker_state $who -${#ids[@]}
+			hold[$who]=$((hold[$who]-${#ids[@]}))
+			queue=(${ids[@]} ${queue[@]})
+			log "confirm that $who ${confirm}ed $what ${ids[@]}, queue = ($(omit ${queue[@]}))"
+		elif [[ -v stdin[$id] ]] && [ "$confirm" == "confirm" ]; then
+			log "confirm that $who ${confirm}ed $what $id input"
+		else
+			log "ignore that $who ${confirm}ed $what $id since no such $what"
+		fi
+
+	elif [ "$what" == "response" ]; then
+		local ids=()
+		if [[ ${own[$id]} == $who ]] && [[ -v res[$id] ]]; then
+			ids=($id)
+		elif [[ $id == *[^0-9]* ]]; then
+			ids=($(<<<$id xargs_eval -d' ' "filter_keys own \"{}\" $who" | sort -nu))
+			retain_from ids ${!res[@]}
+		fi
+		if [[ ${ids[@]} ]] && [ "$confirm" == "accept" ]; then
+			for id in ${ids[@]}; do
+				unset res[$id] cmd[$id] own[$id] tmout[$id] prefer[$id] stdin[$id] stdout[$id]
+			done
+			log "confirm that $who ${confirm}ed $what ${ids[@]}"
+		elif [[ ${ids[@]} ]] && [ "$confirm" == "reject" ]; then
+			queue+=(${ids[@]})
+			for id in ${ids[@]}; do
+				if confirm_request $id && initialize_request $id; then
+					echo "$who << accept request $id"
+				else
+					echo "$who << reject request $id"
+					erase_from queue $id
+				fi
+			done
+			log "confirm that $who ${confirm}ed $what ${ids[@]}, queue = ($(omit ${queue[@]}))"
+		elif [[ -v stdout[$id] ]] && [ "$confirm" == "confirm" ]; then
+			log "confirm that $who ${confirm}ed $what $id output"
+		else
+			log "ignore that $who ${confirm}ed $what $id since no such $what"
+		fi
+
+	elif [ "$what" == "terminate" ]; then
+		local ids=() ida=()
+		if [[ ! -v assign[$id] ]]; then
+			ids=($id)
+		elif [[ ${assign[$id]} == $who ]]; then
+			ids=($id)
+			ida=($id)
+		elif [[ $id == *[^0-9]* ]]; then
+			ids=($(<<<$id xargs_eval -d' ' "filter_keys assign \"{}\" $who" | sort -nu))
+			ida=(${ids[@]})
+		fi
+		if [[ ${ida[@]} ]] && ([ "$confirm" == "accept" ] || [ "$confirm" == "confirm" ]); then
+			for id in ${ida[@]}; do unset assign[$id]; done
+			queue=(${ida[@]} ${queue[@]})
+			log "confirm that $who ${confirm}ed $what ${ids[@]}, queue = ($(omit ${queue[@]}))"
+		elif [[ ${ids[@]} ]]; then
+			log "confirm that $who ${confirm}ed $what ${ids[@]}"
+		else
+			log "ignore that $who ${confirm}ed $what $id since no such $what"
+		fi
+
+	elif [ "$what" == "protocol" ]; then
+		if [ "$confirm" == "accept" ]; then
+			log "handshake with $who successfully"
+			subscribe state $who
+			log "subscribed state for new broker $who"
+			observe_state
+			echo "$who << notify state ${system_state[@]}"
+		elif [ "$confirm" == "reject" ]; then
+			log "handshake failed, unsupported protocol; shutdown"
+			exit_code=2
+			return 255
+		fi
+
+	else
+		return 1
+	fi
+
+	return 0
+}
+
+handle_accept_input() {
+	handle_confirm_input "$@"
+}
+
+handle_reject_input() {
+	handle_confirm_input "$@"
 }
 
 handle_query_input() { # ^query (.+)$
@@ -865,6 +852,16 @@ handle_extended_input() {
 	local content=$1
 	local from=$2
 	return 1
+}
+
+complete_input() {
+	if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
+		assign_requests
+	fi
+	if (( ${#pid[@]} )); then
+		fetch_responses
+	fi
+	refresh_observations
 }
 
 confirm_request() {
