@@ -16,6 +16,7 @@ main() {
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
+	init_configs ${mode:-$(basename "$0" .sh)}
 
 	declare -A own # [id]=owner
 	declare -A cmd # [id]=command
@@ -788,10 +789,7 @@ handle_chat_system_info() { # ^(.+)$
 			name=${info:6}
 			log "registered as $name successfully"
 			if [[ ! $registered ]]; then
-				registered=$name
-				init_mode ${mode:-$(basename "$0" .sh)}
-				observe_overview; observe_status
-				log "initialized: state ${system_status[@]}"
+				init_register $name
 				foreach contact_broker ${brokers[@]}
 				foreach contact_worker ${workers[@]}
 			fi
@@ -1212,6 +1210,29 @@ unset_config() {
 	return 0
 }
 
+init_configs() {
+	local mode=$1
+	if [[ $mode == broker ]]; then
+		contains configs affinity || affinity=
+	elif [[ $mode == worker ]]; then
+		contains configs capacity || capacity=
+		if ! contains configs affinity; then
+			{ affinity=$capacity; } 2>/dev/null
+			(( affinity )) || affinity=$(nproc)
+			capacity=
+		fi
+	fi
+}
+
+init_register() {
+	local name=$1
+	registered=$name
+	set_capacity ${capacity}
+	set_affinity ${affinity:-0}
+	observe_overview; observe_status
+	log "initialized: state ${system_status[@]}"
+}
+
 set_capacity() {
 	capacity=${1}
 }
@@ -1227,22 +1248,6 @@ set_affinity() {
 	elif [[ -v state[$name] ]]; then
 		discard_worker $name
 	fi
-}
-
-init_mode() {
-	local mode=$1
-	if [[ $mode == broker ]]; then
-		contains configs affinity || affinity=
-	elif [[ $mode == worker ]]; then
-		contains configs capacity || capacity=
-		if ! contains configs affinity; then
-			{ affinity=$capacity; } 2>/dev/null
-			(( affinity )) || affinity=$(nproc)
-			capacity=
-		fi
-	fi
-	set_capacity ${capacity}
-	set_affinity ${affinity:-0}
 }
 
 observe_overview() {
