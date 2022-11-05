@@ -666,18 +666,16 @@ handle_operate_input() { # ^operate (.+)$
 		if [[ " ${matches[@]} " == *" $name "* ]]; then
 			log "accept operate $type on $name from $who"
 			if [ "$type" == "shutdown" ]; then
-				declare -g name=$name
-				foreach kill_request ${!pid[@]}
-				exit_code=0
+				log "$(name) is shutting down..."
+				prepare_shutdown
+				exit_code=${exit_code:-0}
 				return 255
 
 			elif [ "$type" == "restart" ]; then
 				log "$(name) is restarting..."
-				foreach kill_request ${!pid[@]}
+				prepare_restart
 				local vars=() args=()
 				args_of ${configs[@]} >/dev/null
-				[[ $tcp_fd ]] && exec 0<&- 1>&-
-				[[ $res_fd ]] && exec {res_fd}<&- {res_fd}>&-
 				exec $0 "${args[@]}"
 			fi
 		fi
@@ -1447,6 +1445,18 @@ discard_assets() {
 	log "discard assets: $id"
 	terminate $id
 	unset cmd[$id] own[$id] res[$id] tmout[$id] tmdue[$id] prefer[$id] stdin[$id] stdout[$id]
+}
+
+prepare_shutdown() {
+	declare -g name=$name
+	foreach kill_request ${!pid[@]}
+	exit_code=0
+}
+
+prepare_restart() {
+	foreach kill_request ${!pid[@]}
+	[[ $tcp_fd ]] && exec 0<&- 1>&-
+	[[ $res_fd ]] && exec {res_fd}<&- {res_fd}>&-
 }
 
 node_login() {
