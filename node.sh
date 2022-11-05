@@ -838,12 +838,16 @@ handle_chat_system_info() { # ^(.+)$
 	return 0
 }
 
-handle__input() {
+handle_noinput() {
 	local current=$(date +%s%3N)
 	check_request_timeout $current
 	check_hold_timeout $current
 	jobs >/dev/null 2>&1
 	return 0
+}
+
+handle__input() {
+	handle_noinput
 }
 
 handle_extended_input() {
