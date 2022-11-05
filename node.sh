@@ -726,11 +726,7 @@ handle_operate_input() { # ^operate (.+)$
 		fi
 
 	elif [[ "$options" == "shell "* ]]; then
-		local options=${options:6}
-		[[ $options =~ ^(\{(.+)\}|(.+))$ ]] && options=${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}
-		echo "$who << accept execute shell {$options}"
-		log "accept operate shell {$options} from $who"
-		operate_eval "$options"
+		handle_shell_input "$options" "$who"
 
 	elif [[ "$options" == "output "* ]]; then
 		local output=${options:7}
@@ -746,13 +742,19 @@ handle_operate_input() { # ^operate (.+)$
 }
 
 handle_shell_input() { # ^shell (.+)$
-	local options=${1#* }
+	local shell=${1#shell }
 	local who=$2
 
-	[[ $options =~ ^(\{(.+)\}|(.+))$ ]] && options=${BASH_REMATCH[2]:-${BASH_REMATCH[3]}}
-	echo "$who << accept execute shell {$options}"
-	log "accept execute shell {$options} from $who"
-	operate_eval "$options" &
+	[[ ${shell:0:1}${shell: -1} == {} ]] && shell=${shell:1:-1}
+	echo "$who << accept execute shell {$shell}"
+	log "accept execute shell {$shell} from $who"
+
+	if [[ $shell =~ ([\&\ ]+)$ ]]; then
+		shell=${shell%$BASH_REMATCH}
+		operate_eval "$shell" "$who" &
+	else
+		operate_eval "$shell" "$who"
+	fi
 
 	return 0
 }
@@ -1147,12 +1149,13 @@ check_hold_timeout() {
 	done
 }
 
-operate_eval() { # required variables: who options
+operate_eval() {
+	local shell=$1 who=$2
 	local output code lines
-	output=$(eval "$options" 2>&1)
+	output=$(eval "$shell" 2>&1)
 	code=$?
 	lines=$((${#output} ? $(<<<$output wc -l) : 0))
-	echo "$who << result shell {$options} return $code ($lines)"
+	echo "$who << result shell {$shell} return $code ($lines)"
 	echo -n "$output" | xargs -r -d'\n' -L1 echo "$who << #"
 }
 
