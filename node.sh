@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2022-11-01 (protocol 0)"
+	log "chat::node version 2022-11-14 (protocol 0)"
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
@@ -62,20 +62,13 @@ session() {
 	echo "protocol 0"
 
 	local message
-	local from content handle
+	local from info
 
 	while input message; do
 		from=${message%% *}
-		if [[ $from != '#' && $from != '%' ]]; then
-			content=${message#* >> }
-			handle=handle_${content%% *}_input
-			[[ $(type -t $handle) == function ]] || handle=handle_extended_input
-		else
-			content=${message:2}
-			handle=handle_chat_system_info
-		fi
+		info=${message#* >> }
 
-		if $handle "$content" "$from"; then
+		if handle_${info%% *}_input "$info" "$from" || handle_extended_input "$info" "$from"; then
 			complete_input
 		else
 			[[ $exit_code ]] && return $exit_code
@@ -361,6 +354,9 @@ handle_confirm_input() { # ^(accept|reject|confirm) (\S+) (.+)$
 			return 255
 		fi
 
+	elif [ "$what" == "restart" ]; then
+		log "confirm that $who ${confirm}ed ${what}${option:+ $option}"
+
 	else
 		return 1
 	fi
@@ -381,7 +377,7 @@ handle_query_input() { # ^query (.+)$
 	local who=$2
 
 	if [ "$options" == "protocol" ] || [ "$options" == "version" ]; then
-		echo "$who << protocol 0 version 2022-11-01"
+		echo "$who << protocol 0 version 2022-11-14"
 		log "accept query protocol from $who"
 
 	elif [ "$options" == "overview" ]; then
@@ -757,79 +753,85 @@ handle_shell_input() { # ^shell (.+)$
 	return 0
 }
 
-handle_chat_system_info() { # ^(.+)$
+
+handle_chat_notification() { # ^(.+)$
 	local info=$1
 	local type=$2
 
-	if [ "$type" == "#" ]; then
-		if [[ $info == "login: "* ]]; then
-			local who=${info:7}
-			node_login $who
+	[ "$type" == "#" ] || return 1
 
-		elif [[ $info == "logout: "* ]]; then
-			local who=${info:8}
-			node_logout $who
+	if [[ $info == "login: "* ]]; then
+		local who=${info:7}
+		node_login $who
 
-		elif [[ $info == "name: "*" becomes "* ]]; then
-			local who=${info:6}; who=${who%% *}
-			local new=${info##* }
-			node_rename $who $new
+	elif [[ $info == "logout: "* ]]; then
+		local who=${info:8}
+		node_logout $who
 
-		else
-			return 1
+	elif [[ $info == "name: "*" becomes "* ]]; then
+		local who=${info:6}; who=${who%% *}
+		local new=${info##* }
+		node_rename $who $new
+
+	else
+		return 1
+	fi
+
+	return 0
+}
+
+handle_chat_operation() { # ^(.+)$
+	local info=$1
+	local type=$2
+
+	[ "$type" == "%" ] || return 1
+
+	if [[ "$info" == "protocol: "* ]]; then
+		log "chat system protocol verified successfully"
+		log "register node${name:+ $name} on the chat system..."
+		echo "name${name:+ $name}"
+
+	elif [[ "$info" == "name: "* ]]; then
+		name=${info:6}
+		log "registered as $name successfully"
+		if [[ ! $registered ]]; then
+			init_register $name
+			foreach contact_broker ${brokers[@]}
+			foreach contact_worker ${workers[@]}
 		fi
 
-	elif [ "$type" == "%" ]; then
-		if [[ "$info" == "protocol: "* ]]; then
-			log "chat system protocol verified successfully"
+	elif [[ "$info" == "who: "* ]]; then
+		local online=(${info:5})
+
+		if [[ ! $registered ]]; then
+			name=$(name)
+			while contains online $name; do name=${name%-*}-$((${name##*-}+1)); done
 			log "register node${name:+ $name} on the chat system..."
 			echo "name${name:+ $name}"
-
-		elif [[ "$info" == "name: "* ]]; then
-			name=${info:6}
-			log "registered as $name successfully"
-			if [[ ! $registered ]]; then
-				init_register $name
-				foreach contact_broker ${brokers[@]}
-				foreach contact_worker ${workers[@]}
-			fi
-
-		elif [[ "$info" == "who: "* ]]; then
-			local online=(${info:5})
-
-			if [[ ! $registered ]]; then
-				name=$(name)
-				while contains online $name; do name=${name%-*}-$((${name##*-}+1)); done
-				log "register node${name:+ $name} on the chat system..."
-				echo "name${name:+ $name}"
-			fi
-
-			local unexpectedly=($(printf "%s\n" ${own[@]} ${!state[@]} $(<<<${!news[@]} sed -E "s/\S+-//g") | sort -u))
-			erase_from unexpectedly ${online[@]}
-
-			local who
-			for who in $(printf "%s\n" ${unexpectedly[@]} | sort -u); do
-				log "$who disconnected unexpectedly"
-				node_logout $who
-			done
-
-		elif [[ "$info" == "failed name"* ]]; then
-			registered=
-			log "name${name:+ $name} has been occupied, query online names..."
-			echo "who"
-
-		elif [[ "$info" == "failed chat"* ]]; then
-			log "failed chat, check online names..."
-			echo "who"
-
-		elif [[ "$info" == "failed protocol"* ]]; then
-			log "unsupported protocol; shutdown"
-			exit_code=1
-			return 255
-
-		else
-			return 1
 		fi
+
+		local unexpectedly=($(printf "%s\n" ${own[@]} ${!state[@]} $(<<<${!news[@]} sed -E "s/\S+-//g") | sort -u))
+		erase_from unexpectedly ${online[@]}
+
+		local who
+		for who in $(printf "%s\n" ${unexpectedly[@]} | sort -u); do
+			log "$who disconnected unexpectedly"
+			node_logout $who
+		done
+
+	elif [[ "$info" == "failed name"* ]]; then
+		registered=
+		log "name${name:+ $name} has been occupied, query online names..."
+		echo "who"
+
+	elif [[ "$info" == "failed chat"* ]]; then
+		log "failed chat, check online names..."
+		echo "who"
+
+	elif [[ "$info" == "failed protocol"* ]]; then
+		log "unsupported protocol; shutdown"
+		exit_code=1
+		return 255
 
 	else
 		return 1
@@ -846,12 +848,20 @@ handle_noinput() {
 	return 0
 }
 
-handle__input() {
+eval 'handle_#_input() {
+	handle_chat_notification "${1:2}" "$2"
+}'
+
+eval 'handle_%_input() {
+	handle_chat_operation "${1:2}" "$2"
+}'
+
+eval 'handle__input() {
 	handle_noinput
-}
+}'
 
 handle_extended_input() {
-	local content=$1
+	local info=$1
 	local from=$2
 	return 1
 }
@@ -1745,6 +1755,10 @@ retain_from() {
 		[[ $patt == *" $item "* ]] && save+="$item "
 	done
 	eval "${1:-_}=($save)"
+}
+
+command_not_found_handle() {
+	return 127
 }
 
 override() {
