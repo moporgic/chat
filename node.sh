@@ -1776,6 +1776,7 @@ xargs_eval() {
 }
 
 command_not_found_handle() {
+	[[ $1 != handle_*_input ]] && echo "$(basename $0): $1: command not found" >&2
 	return 127
 }
 
