@@ -61,9 +61,7 @@ session() {
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
 
-	local message
-	local from info
-
+	local message from info
 	while input message; do
 		from=${message%% *}
 		info=${message#* >> }
@@ -1628,16 +1626,6 @@ unpack() {
 	return $code
 }
 
-millisec() {
-	[[ $1 =~ ^[0-9]* ]]
-	case "${1:${#BASH_REMATCH}}" in
-		h*) echo $((BASH_REMATCH*3600000)); ;;
-		ms) echo $((BASH_REMATCH)); ;;
-		m*) echo $((BASH_REMATCH*60000)); ;;
-		*)  echo $((BASH_REMATCH*1000)); ;;
-	esac
-}
-
 init_system_io() {
 	trap 'log "$(name) has been interrupted"; exit 64' INT
 	trap 'log "$(name) has been terminated"; exit 64' TERM
@@ -1757,6 +1745,36 @@ retain_from() {
 	eval "${1:-_}=($save)"
 }
 
+millisec() {
+	[[ $1 =~ ^[0-9]* ]]
+	case "${1:${#BASH_REMATCH}}" in
+		h*) echo $((BASH_REMATCH*3600000)); ;;
+		ms) echo $((BASH_REMATCH)); ;;
+		m*) echo $((BASH_REMATCH*60000)); ;;
+		*)  echo $((BASH_REMATCH*1000)); ;;
+	esac
+}
+
+foreach() {
+	local run=$1 code=0 arg
+	for arg in "${@:2}"; do $run "$arg"; code=$((code|$?)); done
+	return $code
+}
+
+xargs_eval() {
+	local item
+	local read="read -r"
+	case "$1" in
+	-d)  read+=" -d\"${2}\""; shift 2; ;;
+	-d*) read+=" -d\"${1:2}\""; shift; ;;
+	esac
+	local exec="${@:-echo}"
+	[[ $exec == *"{}"* ]] || exec+=" {}"
+	exec=${exec//{\}/\$item}
+	while eval $read item; do eval "$exec"; done
+	[[ $item ]] && eval "$exec"
+}
+
 command_not_found_handle() {
 	return 127
 }
@@ -1784,26 +1802,6 @@ cpfx() { local fx; fx=$(declare -f ${1?}) && eval "${fx/$1/${2?}}"; }
 rmfx() { unset -f $@; }
 
 mvfx() { cpfx $1 $2 && rmfx $1; }
-
-foreach() {
-	local run=$1 code=0 arg
-	for arg in "${@:2}"; do $run "$arg"; code=$((code|$?)); done
-	return $code
-}
-
-xargs_eval() {
-	local item
-	local read="read -r"
-	case "$1" in
-	-d)  read+=" -d\"${2}\""; shift 2; ;;
-	-d*) read+=" -d\"${1:2}\""; shift; ;;
-	esac
-	local exec="${@:-echo}"
-	[[ $exec == *"{}"* ]] || exec+=" {}"
-	exec=${exec//{\}/\$item}
-	while eval $read item; do eval "$exec"; done
-	[[ $item ]] && eval "$exec"
-}
 
 envinfo() {
 	# host name
