@@ -1652,6 +1652,22 @@ init_system_io() {
 		fi
 	fi
 
+	if [[ $buffered_input ]]; then
+		if { exec {buffered_input}<&0 0< <(
+			stdin_buf=$(mktemp /tmp/$(basename $0 .sh).XXXX.stdin)
+			cat <&$buffered_input {buffered_input}<&- >$stdin_buf &
+			sleep ${system_tick:-0.1}
+			tail -s ${system_tick:-0.1} -f $stdin_buf {buffered_input}<&- &
+			trap 'kill $(jobs -p) 2>&-; rm -f $stdin_buf 2>&-' EXIT
+			wait -n
+		) {buffered_input}<&-; } 2>/dev/null; then
+			log "applied buffered input successfully"
+		else
+			log "failed to apply buffered input at $stdin_buf"
+			return $((exit_code=14))
+		fi
+	fi
+
 	if { exec {res_fd}<> <(:); } 2>/dev/null; then
 		log "initialized response pipe successfully"
 	else
