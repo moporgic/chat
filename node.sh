@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2022-11-14 (protocol 0)"
+	log "chat::node version 2022-11-20 (protocol 0)"
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
@@ -156,7 +156,7 @@ handle_response_input() { # ^response (\S+) (\S+) \{(.*)\}$
 	[ "${output:0:1}$what${output: -1}" == "{response}" ] || return 1
 	output=${output:1:-1}
 
-	if [[ -v cmd[$id] ]] && [ "${assign[$id]}" == "$worker" ]; then
+	if [[ -v cmd[$id] ]] && [[ ${assign[$id]} == $worker ]]; then
 		if [ $code != output ]; then
 			res[$id]=$code:${stdout[$id]}$output
 			adjust_worker_state $worker -1
@@ -166,6 +166,12 @@ handle_response_input() { # ^response (\S+) (\S+) \{(.*)\}$
 		else
 			stdout[$id]+=$output\\n
 			echo "$worker << confirm response $id"
+		fi
+		if [[ -v hdue[$id] ]]; then
+			hold[$worker]=$((hold[$worker]-1))
+			log "confirm that $worker acquiesced accepted request $id"
+			unset hdue[$id]
+			notify_assign_request $id $worker
 		fi
 		echo "${own[$id]} << response $id $code {$output}"
 		log "accept response $id $code {$output} from $worker and forward it to ${own[$id]}"
@@ -375,7 +381,7 @@ handle_query_input() { # ^query (.+)$
 	local who=$2
 
 	if [ "$options" == "protocol" ] || [ "$options" == "version" ]; then
-		echo "$who << protocol 0 version 2022-11-14"
+		echo "$who << protocol 0 version 2022-11-20"
 		log "accept query protocol from $who"
 
 	elif [ "$options" == "overview" ]; then
