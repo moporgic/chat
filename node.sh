@@ -691,6 +691,7 @@ handle_operate_input() { # ^operate (.+)$
 			foreach contact_${what%s} "$option"
 
 		elif [ "$type" == "discard" ]; then
+			local clients=()
 			log "accept operate $type $what $option from $who"
 			[[ $what == broker* ]] && clients+=($(<<<$option xargs_eval -d' ' "filter \"{}\" ${notify[state]}"))
 			[[ $what == worker* ]] && clients+=($(<<<$option xargs_eval -d' ' "filter \"{}\" ${!state[@]}"))
@@ -701,7 +702,7 @@ handle_operate_input() { # ^operate (.+)$
 			fi
 
 		elif [ "$type" == "forward" ]; then
-			local clients=() who
+			local clients=()
 			[[ $what == broker* ]] && clients+=(${notify[state]})
 			[[ $what == worker* ]] && clients+=(${!state[@]})
 			clients=($(printf "%s\n" ${clients[@]} | sort -u))
