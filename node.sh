@@ -121,11 +121,11 @@ handle_request_input() { # ^request (([0-9]+) )?(\{(.*)\}( with( ([^{}]+)| ?))?|
 			if [[ ${assign[$id]} != $name ]]; then
 				echo "${assign[$id]} << request $id input {$input}"
 				echo "$owner << confirm request $id"
-				log "accept request $id input {$input} from $owner, forward to ${assign[$id]}"
+				log "accept request $id input {$input} from $owner and forward it to ${assign[$id]}"
 			else
 				echo "$input" >&${stdin[$id]}
 				echo "$owner << confirm request $id"
-				log "accept request $id input {$input} from $owner, input into $id"
+				log "accept request $id input {$input} from $owner and input it into $id"
 			fi
 		elif [[ ${own[$id]} != $owner ]]; then
 			echo "$owner << reject request $id"
@@ -175,6 +175,7 @@ handle_response_input() { # ^response (\S+) (\S+) \{(.*)\}$
 		fi
 		echo "${own[$id]} << response $id $code {$output}"
 		log "accept response $id $code {$output} from $worker and forward it to ${own[$id]}"
+		log "assume that $worker state ${state[$worker]/:/ }"
 
 	elif [[ ! -v cmd[$id] ]]; then
 		echo "$worker << accept response $id"
@@ -203,11 +204,11 @@ handle_terminate_input() { # ^terminate (.+)$
 	fi
 	if [[ ${ids[@]} ]]; then
 		printf "$who << accept terminate %d\n" ${ids[@]}
+		log "accept terminate ${ids[@]} from $who"
 		for id in ${ids[@]}; do
 			terminate $id
 			unset cmd[$id] own[$id] tmout[$id] tmdue[$id] prefer[$id] stdin[$id] stdout[$id]
 		done
-		log "accept terminate ${ids[@]} from $who, queue = ($(omit ${queue[@]}))"
 
 	elif [ "${own[$id]}" ] && [[ ! -v res[$id] ]]; then
 		echo "$who << reject terminate $id"
@@ -656,15 +657,13 @@ handle_operate_input() { # ^operate (.+)$
 		local matches=($(<<<$patt xargs_eval -d' ' "filter \"{}\" ${!state[@]} $name" | sort -u))
 
 		echo "$who << confirm $type ${matches[@]}"
-		local match
-		for match in ${matches[@]}; do
-			if [[ -v state[$match] ]] && [ "$match" != "$name" ]; then
-				log "accept operate $type on $match from $who"
-				echo "$match << operate $type"
-			fi
-		done
+		log "accept operate $type on ${matches[@]} from $who"
+
+		local clients=(${matches[@]})
+		erase_from clients $name
+		[[ ${clients[@]} ]] && printf "%s << operate $type\n" ${clients[@]}
+
 		if [[ " ${matches[@]} " == *" $name "* ]]; then
-			log "accept operate $type on $name from $who"
 			if [ "$type" == "shutdown" ]; then
 				log "$(name) is shutting down..."
 				prepare_shutdown
@@ -958,8 +957,8 @@ assign_requests() {
 		worker=(${workers[$pref]})
 		[[ $worker ]] || continue
 
+		request="$id {${cmd[$id]}}"
 		if [[ $worker != $name ]]; then
-			request="$id {${cmd[$id]}}"
 			with=
 			[[ -v stdin[$id] ]] && with+=" input"
 			[[ -v stdout[$id] ]] && with+=" output"
@@ -971,19 +970,19 @@ assign_requests() {
 			assign[$id]=$worker
 			hdue[$id]=$(($(date +%s%3N)+${hold_timeout:-1000}*${hold[$worker]}))
 			erase_from queue $id
-			log "assign request $id to $worker," \
-			    "assume that $worker state ${state[$worker]/:/ } (${hold[$worker]} hold)"
+			log "assign request $id to $worker"
+			log "assume that $worker state ${state[$worker]/:/ } (${hold[$worker]} hold)"
 
 		elif execute_request $id; then
 			adjust_worker_state $worker +1
 			assign[$id]=$worker
 			erase_from queue $id
-			log "execute request $id at $worker," \
-			    "$worker state ${state[$worker]/:/ }"
+			log "execute request $request"
+			log "verify that $worker state ${state[$worker]/:/ }"
 			notify_assign_request $id $worker
 
 		else
-			log "failed to execute request $id"
+			log "failed to execute request $request"
 		fi
 	done
 }
@@ -1075,6 +1074,7 @@ fetch_responses() {
 				stdout[$id]+=$output\\n
 			fi
 			log "complete response $id $code {$output} and forward it to ${own[$id]}"
+			log "verify that $name state ${state[$name]/:/ }"
 			echo "${own[$id]} << response $id $code {$output}"
 		else
 			log "complete orphan response $id $code {$output}"
@@ -1097,6 +1097,7 @@ terminate() {
 		[[ -v state[$name] ]] && adjust_worker_state $name -1
 		kill_request $id
 		log "request $id has been terminated"
+		log "verify that $name state ${state[$name]/:/ }"
 		unset assign[$id] pid[$id]
 		return 0
 
@@ -1106,6 +1107,7 @@ terminate() {
 			adjust_worker_state $worker -1
 			echo "$worker << terminate $id"
 			log "forward terminate $id to $worker"
+			log "assume that $worker state ${state[$worker]/:/ }"
 		fi
 		if [[ -v hdue[$id] ]] && [[ -v hold[$worker] ]]; then
 			hold[$worker]=$((hold[$worker]-1))
@@ -1115,6 +1117,7 @@ terminate() {
 
 	elif contains queue $id; then
 		erase_from queue $id
+		log "request $id has been dequeued, queue = ($(omit ${queue[@]}))"
 		return 0
 
 	else
@@ -1135,16 +1138,15 @@ kill_request() {
 check_request_timeout() {
 	local current=$1 id
 	for id in ${!tmdue[@]}; do
-		local due=${tmdue[$id]}
-		if (( $current > $due )); then
-			log "request $id failed due to timeout" \
-			    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), notify ${own[$id]}"
-			local code="timeout"
-			local output=
+		if (( current > tmdue[$id] )); then
+			local due=${tmdue[$id]}
+			due=$(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}
+			local code="timeout" output=
 			res[$id]=$code:${stdout[$id]}$output
-			echo "${own[$id]} << response $id $code {$output}"
 			terminate $id
 			unset tmdue[$id]
+			log "request $id timeout at $due, notify ${own[$id]}"
+			echo "${own[$id]} << response $id $code {$output}"
 		fi
 	done
 }
@@ -1152,16 +1154,17 @@ check_request_timeout() {
 check_hold_timeout() {
 	local current=$1 id
 	for id in ${!hdue[@]}; do
-		local due=${hdue[$id]}
-		if (( $current > $due )); then
-			queue=($id ${queue[@]})
-			log "request $id failed to be assigned" \
-			    "(due $(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}), queue = ($(omit ${queue[@]}))"
+		if (( current > hdue[$id] )); then
+			local due=${hdue[$id]}
+			due=$(date '+%Y-%m-%d %H:%M:%S' -d @${due:0:-3}).${due: -3}
 			local worker=${assign[$id]}
 			adjust_worker_state $worker -1
 			hold[$worker]=$((hold[$worker]-1))
-			echo "$worker << report state requests"
+			queue=($id ${queue[@]})
 			unset assign[$id] hdue[$id]
+			log "request $id hold expires at $due, queue = ($(omit ${queue[@]}))"
+			log "assume that $worker state ${state[$worker]/:/ }"
+			echo "$worker << report state requests"
 		fi
 	done
 }
@@ -1438,8 +1441,8 @@ contact_worker() {
 		echo "$worker << report state"
 	else
 		[[ -v state[$name] ]] || set_affinity $affinity
-		[[ -v state[$name] ]] && log "contact local worker, state ${state[$name]/:/ }" || \
-			log "unable to contact local worker"
+		[[ -v state[$name] ]] && log "contact $name, verify that $name state ${state[$name]/:/ }" || \
+			log "unable to contact $name"
 	fi
 }
 
