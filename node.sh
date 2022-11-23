@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2022-11-20 (protocol 0)"
+	log "chat::node version 2022-11-23 (protocol 0)"
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
@@ -358,7 +358,7 @@ handle_confirm_input() { # ^(accept|reject|confirm) (\S+) (.+)$
 			return 255
 		fi
 
-	elif [ "$what" == "restart" ]; then
+	elif [ "$what" == "restart" ] || [ "$what" == "contact" ]|| [ "$what" == "discard" ]; then
 		log "confirm that $who ${confirm}ed ${what}${option:+ $option}"
 
 	else
@@ -381,7 +381,7 @@ handle_query_input() { # ^query (.+)$
 	local who=$2
 
 	if [ "$options" == "protocol" ] || [ "$options" == "version" ]; then
-		echo "$who << protocol 0 version 2022-11-20"
+		echo "$who << protocol 0 version 2022-11-23"
 		log "accept query protocol from $who"
 
 	elif [ "$options" == "overview" ]; then
@@ -1447,6 +1447,10 @@ discard_broker() {
 	local broker=${1?}
 	log "discard broker: $broker"
 	unsubscribe state "$broker"
+	if [[ ${discard_at_remote-broker+worker} == *"broker"* && $broker != $name ]]; then
+		log "forward discard worker to $broker"
+		echo "$broker << operate discard worker $name"
+	fi
 }
 
 discard_worker() {
@@ -1455,6 +1459,10 @@ discard_worker() {
 	local ids=$(filter_keys assign $worker)
 	foreach terminate $ids
 	unset state[$worker] hold[$worker]
+	if [[ ${discard_at_remote-broker+worker} == *"worker"* && $worker != $name ]]; then
+		log "forward discard broker to $worker"
+		echo "$worker << operate discard broker $name"
+	fi
 	queue=($ids ${queue[@]})
 	[[ $ids ]] && log "revoke assigned request $ids, queue = ($(omit ${queue[@]}))"
 }
@@ -1502,6 +1510,7 @@ node_logout() {
 	contains brokers $who && log "broker $who disconnected, wait until $who come back..."
 	contains workers $who && log "worker $who disconnected, wait until $who come back..."
 
+	local discard_at_remote="none"
 	[[ -v state[$who] ]] && unset state[$who] && discard_worker $who
 	[[ -v news[state-$who] ]] && discard_broker $who
 
