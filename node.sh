@@ -1523,7 +1523,7 @@ node_logout() {
 		unsubscribe $item $who
 	done
 
-	if contains own $who && [[ ! ${keep_unowned_tasks} ]]; then
+	if contains own $who && [[ ! ${keep_orphan_assets} ]]; then
 		foreach discard_assets $(filter_keys own $who)
 	fi
 	mvfx log_src log
