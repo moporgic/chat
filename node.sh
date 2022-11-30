@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2022-11-23 (protocol 0)"
+	log "chat::node version 2022-11-30 (protocol 0)"
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
@@ -382,7 +382,7 @@ handle_query_input() { # ^query (.+)$
 	local who=$2
 
 	if [ "$options" == "protocol" ] || [ "$options" == "version" ]; then
-		echo "$who << protocol 0 version 2022-11-23"
+		echo "$who << protocol 0 version 2022-11-30"
 		log "accept query protocol from $who"
 
 	elif [ "$options" == "overview" ]; then
@@ -1127,7 +1127,11 @@ terminate() {
 
 kill_request() {
 	local id=${1:-x} code
-	{	kill ${pid[$id]} $(pgrep -P $(pgrep -P ${pid[$id]}));
+	{	local pids=(${pid[$id]})
+		while [[ ${pids[@]} ]]; do
+			echo ${pids[0]}
+			pids=(${pids[@]:1} $(pgrep -P ${pids[0]}))
+		done | xargs kill
 		code=$?
 	} 2>/dev/null
 	unset pid[$id]
