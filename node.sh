@@ -438,12 +438,12 @@ handle_query_input() { # ^query (.+)$
 		done
 		log "accept query workers from $who, workers = ($(omit ${query[@]}))"
 	} &
-	elif [[ "$options" =~ ^(job|task)s?(.*)$ ]] ; then
+	elif [[ "$options" =~ ^(asset|job|task)s?(.*)$ ]] ; then
 	{
 		local ids=() id
 		ids=(${BASH_REMATCH[2]:-$(printf "%s\n" ${!cmd[@]} | sort -n)})
 		retain_from ids ${!cmd[@]}
-		echo "$who << jobs = (${ids[@]})"
+		echo "$who << assets = (${ids[@]})"
 		for id in ${ids[@]}; do
 			if [[ -v res[$id] ]]; then
 				echo "$who << # $id {${cmd[$id]}} [${own[$id]}] = ${res[$id]%%:*} {${res[$id]#*:}}"
@@ -455,7 +455,7 @@ handle_query_input() { # ^query (.+)$
 				echo "$who << # $id {${cmd[$id]}} [${own[$id]}] @ #$rank"
 			fi
 		done
-		log "accept query jobs from $who, jobs = ($(omit ${ids[@]}))"
+		log "accept query assets from $who, assets = ($(omit ${ids[@]}))"
 	} &
 	elif [[ "$options" =~ ^(request)s?(.*)$ ]] ; then
 	{
