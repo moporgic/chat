@@ -1463,15 +1463,15 @@ discard_broker() {
 discard_worker() {
 	local worker=${1?}
 	log "discard worker: $worker"
-	local ids=$(filter_keys assign $worker)
-	foreach terminate $ids
+	local ids=($(filter_keys assign $worker))
+	foreach terminate ${ids[@]}
 	unset state[$worker] hold[$worker]
 	if [[ ${discard_at_remote-broker+worker} == *"worker"* && $worker != $name ]]; then
 		log "forward discard broker to $worker"
 		echo "$worker << operate discard broker $name"
 	fi
-	queue=($ids ${queue[@]})
-	[[ $ids ]] && log "revoke assigned request $ids, queue = ($(omit ${queue[@]}))"
+	queue=(${ids[@]} ${queue[@]})
+	[[ $ids ]] && log "revoke assigned request ${ids[@]}, queue = ($(omit ${queue[@]}))"
 }
 
 discard_assets() {
