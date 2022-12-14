@@ -1063,32 +1063,36 @@ format_output() {
 fetch_responses() {
 	local id code output
 	while (( ${#pid[@]} )) && fetch_response; do
-		if [[ -v cmd[$id] ]] && [[ -v own[$id] ]]; then
-			if [ $code != output ]; then
-				res[$id]=$code:${stdout[$id]}$output
-				[[ -v stdin[$id] ]] && exec {stdin[$id]}>&- && stdin[$id]=
-				[[ -v stdout[$id] ]] && stdout[$id]=
-				unset pid[$id] assign[$id] tmdue[$id]
-				adjust_worker_state $name -1
-			else
-				stdout[$id]+=$output\\n
-			fi
-			log "complete response $id $code {$output} and forward it to ${own[$id]}," \
-			    "verify that $name state ${state[$name]/:/ }"
-			echo "${own[$id]} << response $id $code {$output}"
-		else
-			log "complete orphan response $id $code {$output}"
-		fi
+		complete_response
 	done
 }
 
-fetch_response() {
+fetch_response() { # need to prepare variables: id code output
 	local response
 	read -r -t 0 -u ${res_fd} && IFS= read -r -u ${res_fd} response || return $?
 	IFS=' ' read -r response id code output <<< $response || return $?
 	[ "${output:0:1}${response}${output: -1}" == "{response}" ] || return $?
 	output=${output:1:${#output}-2}
 	return $?
+}
+
+complete_response() { # need to prepare variables: id code output
+	if [[ -v cmd[$id] ]] && [[ -v own[$id] ]]; then
+		if [ $code != output ]; then
+			res[$id]=$code:${stdout[$id]}$output
+			[[ -v stdin[$id] ]] && exec {stdin[$id]}>&- && stdin[$id]=
+			[[ -v stdout[$id] ]] && stdout[$id]=
+			unset pid[$id] assign[$id] tmdue[$id]
+			adjust_worker_state $name -1
+		else
+			stdout[$id]+=$output\\n
+		fi
+		log "complete response $id $code {$output} and forward it to ${own[$id]}," \
+		    "verify that $name state ${state[$name]/:/ }"
+		echo "${own[$id]} << response $id $code {$output}"
+	else
+		log "complete orphan response $id $code {$output}"
+	fi
 }
 
 terminate() {
