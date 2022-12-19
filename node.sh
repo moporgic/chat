@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2022-11-30 (protocol 0)"
+	log "chat::node version 2022-12-19 (protocol 0)"
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
@@ -292,6 +292,7 @@ handle_confirm_input() { # ^(accept|reject|confirm) (\S+) (.+)$
 		elif [[ -v stdin[$id] ]] && [ "$confirm" == "confirm" ]; then
 			log "confirm that $who ${confirm}ed $what $id input"
 		else
+			[ "$confirm" == "accept" ] && echo "$who << terminate $id"
 			log "ignore that $who ${confirm}ed $what $id since no such $what"
 		fi
 
@@ -382,7 +383,7 @@ handle_query_input() { # ^query (.+)$
 	local who=$2
 
 	if [ "$options" == "protocol" ] || [ "$options" == "version" ]; then
-		echo "$who << protocol 0 version 2022-11-30"
+		echo "$who << protocol 0 version 2022-12-19"
 		log "accept query protocol from $who"
 
 	elif [ "$options" == "overview" ]; then
