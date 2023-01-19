@@ -1734,6 +1734,28 @@ args_of() {
 	done
 }
 
+declare_of() {
+	args=() vars=()
+	vars=($(declare -p ${@%%=*} 2>/dev/null | grep -E "^declare" | tr '=' ' ' | cut -d' ' -f3 | awk '!x[$0]++'))
+	[[ $@ ]] || erase_from vars args vars
+	local var arg
+	for var in ${vars[@]}; do
+		if arg=$(declare -p $var 2>/dev/null); then
+			echo "$arg"
+			[[ $arg =~ [^=]+=? ]]
+			arg=${arg:${#BASH_REMATCH}}
+			if [[ $arg ]]; then
+				arg=${arg#\"}
+				arg=${arg%\"}
+				arg="=$arg"
+			fi
+			args+=("${var}${arg}")
+		else
+			erase_from vars $var
+		fi
+	done
+}
+
 omit() {
 	if (( "$#" <= ${max_printable_list_size:-10} )); then
 		echo "$@"
