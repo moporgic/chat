@@ -1720,20 +1720,17 @@ input() {
 cleanup() { :; }
 
 args_of() {
-	args=() vars=()
-	local var val arg show=${show:0:3}
-	show=${show:-arg}
-	for var in "$@"; do
-		var=${var%%=*}
-		[[ " ${vars[@]} " == *" $var "* ]] && continue
-		arg="${var}"
+	args=() vars=($(printf "%s\n" ${@%%=*} | awk '!x[$0]++'))
+	local var arg
+	for var in ${vars[@]}; do
 		if [[ $var =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]]; then
-			val="$var[@]"
-			arg+="=${!val}"
+			arg="$var[@]"
+			arg="${var}=${!arg}"
+		else
+			arg="${var}"
 		fi
 		args+=("$arg")
-		vars+=("$var")
-		echo "${!show}"
+		echo "$arg"
 	done
 }
 
