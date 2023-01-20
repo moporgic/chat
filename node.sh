@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2022-12-19 (protocol 0)"
+	log "chat::node version 2023-01-20 (protocol 0)"
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
@@ -383,7 +383,7 @@ handle_query_input() { # ^query (.+)$
 	local who=$2
 
 	if [ "$options" == "protocol" ] || [ "$options" == "version" ]; then
-		echo "$who << protocol 0 version 2022-12-19"
+		echo "$who << protocol 0 version 2023-01-20"
 		log "accept query protocol from $who"
 
 	elif [ "$options" == "overview" ]; then
@@ -496,6 +496,15 @@ handle_query_input() { # ^query (.+)$
 		[[ ${args[@]} ]] && printf "$who << # %s\n" "${args[@]}"
 		log "accept query options from $who, options = ($(omit ${vars[@]}))"
 	} &
+	elif [[ "$options" =~ ^declare(.*)$ ]] ; then
+	{
+		local vars=() args=()
+		local options=${BASH_REMATCH[1]}
+		declare_of $options >/dev/null
+		echo "$who << declare = (${vars[@]})"
+		declare_of $options | xargs_eval 'echo "$who << #"'
+		log "accept query declare from $who, declare = ($(omit ${vars[@]}))"
+	} &
 	elif [ "$options" == "envinfo" ]; then
 	{
 		local envinfo=$(envinfo)
@@ -504,8 +513,9 @@ handle_query_input() { # ^query (.+)$
 		<<< $envinfo xargs -r -d'\n' -L1 echo "$who << #"
 		log "accept query envinfo from $who, envinfo = ($envitem)"
 	} &
-	else
-		return 1
+	else # assume query options
+		[[ $options != $1 ]] && handle_query_input "query options $options" "$who"
+		return $?
 	fi
 
 	return 0
@@ -1721,16 +1731,16 @@ cleanup() { :; }
 
 args_of() {
 	args=() vars=($(printf "%s\n" ${@%%=*} | awk '!x[$0]++'))
-	local var arg
-	for var in ${vars[@]}; do
-		if [[ $var =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]]; then
-			arg="$var[@]"
-			arg="${var}=${!arg}"
+	local var_ arg_
+	for var_ in ${vars[@]}; do
+		if [[ $var_ =~ ^[a-zA-Z_][a-zA-Z_0-9]*$ ]]; then
+			arg_="$var_[@]"
+			arg_="${var_}=${!arg_}"
 		else
-			arg="${var}"
+			arg_="${var_}"
 		fi
-		args+=("$arg")
-		echo "$arg"
+		args+=("$arg_")
+		echo "$arg_"
 	done
 }
 
@@ -1738,20 +1748,26 @@ declare_of() {
 	args=() vars=()
 	vars=($(declare -p ${@%%=*} 2>/dev/null | grep -E "^declare" | tr '=' ' ' | cut -d' ' -f3 | awk '!x[$0]++'))
 	[[ $@ ]] || erase_from vars args vars
-	local var arg
-	for var in ${vars[@]}; do
-		if arg=$(declare -p $var 2>/dev/null); then
-			echo "$arg"
-			[[ $arg =~ [^=]+=? ]]
-			arg=${arg:${#BASH_REMATCH}}
-			if [[ $arg ]]; then
-				arg=${arg#\"}
-				arg=${arg%\"}
-				arg="=$arg"
+	local var_ arg_ opt_ opx_
+	for var_ in ${vars[@]}; do
+		if arg_=$(declare -p $var_ 2>/dev/null); then
+			echo "$arg_"
+			if [[ $arg_ == *=* ]]; then
+				arg_=${arg_#*=}
+				if [[ $arg_ == \"*\" ]]; then
+					arg_=${arg_#\"}; arg_=${arg_%\"}
+				else
+					for opt_ in $(<<< $arg_ grep -Eo '\[[^]]+\]="[^ ]*"'); do
+						opx_=${opt_/=\"/=}; opx_=${opx_%\"}
+						arg_=${arg_/"$opt_"/"$opx_"}
+					done
+				fi
+				args+=("${var_}=${arg_}")
+			else
+				args+=("${var_}")
 			fi
-			args+=("${var}${arg}")
 		else
-			erase_from vars $var
+			erase_from vars $var_
 		fi
 	done
 }
