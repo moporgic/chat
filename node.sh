@@ -737,11 +737,21 @@ handle_operate_input() { # ^operate (.+)$
 	elif [[ "$options" == "shell "* ]]; then
 		handle_shell_input "$options" "$who"
 
+	elif [[ "$options" == "input "* ]]; then
+		local input=${options:6}
+		log "accept operate input \"$input\" from $who"
+		echo "$who << confirm input $input"
+		message=$input
+		from=${message%% *}
+		info=${message#* >> }
+		handle_${info%% *}_input "$info" "$from"
+		return $?
+
 	elif [[ "$options" == "output "* ]]; then
 		local output=${options:7}
-		echo "$output"
 		log "accept operate output \"$output\" from $who"
 		echo "$who << confirm output $output"
+		echo "$output"
 
 	else
 		return 1
