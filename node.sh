@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2023-01-20 (protocol 0)"
+	log "chat::node version 2023-04-01 (protocol 0)"
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
@@ -383,7 +383,7 @@ handle_query_input() { # ^query (.+)$
 	local who=$2
 
 	if [ "$options" == "protocol" ] || [ "$options" == "version" ]; then
-		echo "$who << protocol 0 version 2023-01-20"
+		echo "$who << protocol 0 version 2023-04-01"
 		log "accept query protocol from $who"
 
 	elif [ "$options" == "overview" ]; then
@@ -835,7 +835,7 @@ handle_chat_operation() { # ^(.+)$
 			echo "name${name:+ $name}"
 		fi
 
-		local unexpectedly=($(printf "%s\n" ${own[@]} ${!state[@]} $(<<<${!news[@]} sed -E "s/\S+-//g") | sort -u))
+		local unexpectedly=($(printf "%s\n" ${own[@]} ${!state[@]} $(printf "%s\n" ${!news[@]} | sed -E "s/[^-]+-//") | sort -u))
 		erase_from unexpectedly ${online[@]}
 
 		local who
