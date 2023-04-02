@@ -11,6 +11,7 @@
 #include <ctime>
 #include <iomanip>
 #include <regex>
+#include <deque>
 #include <boost/asio.hpp>
 #include <boost/format.hpp>
 #include <boost/algorithm/string.hpp>
@@ -105,13 +106,22 @@ public:
 	}
 
 	void async_write(const std::string& data) {
+		std::lock_guard<std::mutex> lock(mutex_);
+		output_.emplace_back(std::make_shared<std::string>(data));
+		if (output_.size() == 1) async_write();
+	}
+
+private:
+	void async_write() {
 		auto self(shared_from_this());
-		auto buffer(std::make_shared<std::string>(data));
-		boost::asio::async_write(socket_, boost::asio::buffer(*buffer),
-			[this, self, buffer](error_code ec, size_t n) {
+		boost::asio::async_write(socket_, boost::asio::buffer(*output_.front()),
+			[this, self](error_code ec, size_t n) {
 				if (!ec) {
+					std::lock_guard<std::mutex> lock(mutex_);
+					output_.pop_front();
+					if (output_.size()) async_write();
 				} else {
-					handler_->handle_write_error(self, *buffer, ec);
+					handler_->handle_write_error(self, *output_.front(), ec);
 				}
 			});
 	}
@@ -121,6 +131,8 @@ private:
 	std::string name_;
 	handler* handler_;
 	std::string buffer_;
+	std::deque<std::shared_ptr<std::string>> output_;
+	std::mutex mutex_;
 };
 
 class server : public client::handler {
@@ -345,7 +357,7 @@ private:
 
 int main(int argc, char *argv[]) {
 	try {
-		logger << "chat system version 2022-05-25 (protocol 0)" << std::endl;
+		logger << "chat service version 2023-04-03 (protocol 0)" << std::endl;
 
 		boost::asio::io_context io_context;
 		chat::server chat(io_context, argc < 2 ? 10000 : std::stoul(argv[1]));
