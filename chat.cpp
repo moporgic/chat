@@ -136,13 +136,13 @@ private:
 };
 
 class server : public client::handler {
-	friend class client;
 public:
 	server(boost::asio::io_context& io_context, unsigned short port) :
 			acceptor_(io_context, tcp::endpoint(tcp::v4(), port)) {
 		tcp::endpoint endpoint = acceptor_.local_endpoint();
-		logger << "chat system initialized: " << endpoint.address() << ':' << endpoint.port() << std::endl;
+		logger << "chat service initialized: " << endpoint.address() << ':' << endpoint.port() << std::endl;
 	}
+
 	void async_accept() {
 		acceptor_.async_accept(
 			[this](error_code ec, tcp::socket socket) {
@@ -161,6 +161,7 @@ public:
 				async_accept();
 			});
 	}
+
 protected:
 	virtual void handle_command(std::shared_ptr<client> self, const std::string& line) {
 		logger << self->name() << " >> " << line << std::endl;
@@ -255,9 +256,9 @@ protected:
 			} else {
 				self->reply() << boost::format("failed protocol: unsupported") << std::endl;
 			}
-
 		}
 	}
+
 	virtual void handle_read_error(std::shared_ptr<client> self, error_code ec) {
 		if (self == find_client(self->name())) {
 			if (ec == boost::system::errc::success || ec == boost::asio::error::eof) {
@@ -269,6 +270,7 @@ protected:
 			logger << boost::format("mismatched client %s on read error") % self->name() << std::endl;
 		}
 	}
+
 	virtual void handle_write_error(std::shared_ptr<client> self, const std::string& str, error_code ec) {
 		if (self == find_client(self->name())) {
 			if (str.find(" > ") != std::string::npos) {
@@ -285,6 +287,7 @@ protected:
 			logger << boost::format("mismatched client %s on write error") % self->name() << std::endl;
 		}
 	}
+
 protected:
 	void handle_client_login(std::shared_ptr<client> self) {
 		error_code ec;
@@ -299,6 +302,7 @@ protected:
 			logger << boost::format("failed to insert client %s %s") % self->name() % from << std::endl;
 		}
 	}
+
 	void handle_client_logout(std::shared_ptr<client> self) {
 		error_code ec;
 		tcp::endpoint endpoint = self->socket().remote_endpoint(ec);
@@ -312,6 +316,7 @@ protected:
 			logger << boost::format("failed to remove client %s %s") % self->name() % from << std::endl;
 		}
 	}
+
 private:
 	std::shared_ptr<client> find_client(const std::string& name) {
 		std::scoped_lock lock(clients_mutex_);
@@ -346,6 +351,7 @@ private:
 		clients_.erase(user->name());
 		return true;
 	}
+
 private:
 	tcp::acceptor acceptor_;
 	std::map<std::string, std::shared_ptr<client>> clients_;
