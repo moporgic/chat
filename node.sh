@@ -1701,17 +1701,19 @@ init_system_io() {
 	fi
 
 	if [[ $buffered_input ]]; then
-		if { exec {buffered_input}<&0 0< <(
-			stdin_buf=$(mktemp /tmp/$(basename $0 .sh).XXXX.stdin)
-			cat <&$buffered_input {buffered_input}<&- >$stdin_buf &
+		if { exec {stdin_fd}<&0 0< <(
+			stdin_buf=$buffered_input
+			[[ $stdin_buf != */* ]] && stdin_buf=$(mktemp /tmp/$(basename $0 .sh).XXXX.stdin)
+			cat <&$stdin_fd {stdin_fd}<&- >$stdin_buf &
 			sleep ${system_tick:-0.1}
-			tail -s ${system_tick:-0.1} -f $stdin_buf {buffered_input}<&- &
+			tail -s ${system_tick:-0.1} -f $stdin_buf {stdin_fd}<&- &
 			trap 'kill $(jobs -p) 2>&-; rm -f $stdin_buf 2>&-' EXIT
 			wait -n
-		) {buffered_input}<&-; } 2>/dev/null; then
+		) {stdin_fd}<&-; } 2>/dev/null; then
 			log "applied buffered input successfully"
+			unset stdin_fd
 		else
-			log "failed to apply buffered input at $stdin_buf"
+			log "failed to apply buffered input"
 			return $((exit_code=14))
 		fi
 	fi
