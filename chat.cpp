@@ -106,7 +106,7 @@ public:
 	}
 
 	void async_write(const std::string& data) {
-		std::lock_guard<std::mutex> lock(mutex_);
+		std::scoped_lock lock(mutex_);
 		output_.emplace_back(std::make_shared<std::string>(data));
 		if (output_.size() == 1) async_write();
 	}
@@ -117,7 +117,7 @@ private:
 		boost::asio::async_write(socket_, boost::asio::buffer(*output_.front()),
 			[this, self](error_code ec, size_t n) {
 				if (!ec) {
-					std::lock_guard<std::mutex> lock(mutex_);
+					std::scoped_lock lock(mutex_);
 					output_.pop_front();
 					if (output_.size()) async_write();
 				} else {
