@@ -57,7 +57,8 @@ public:
 	class handler {
 	public:
 		virtual void handle_read(std::shared_ptr<client>, const std::string&) = 0;
-		virtual void handle_read_error(std::shared_ptr<client>, error_code) = 0;
+		virtual void handle_write(std::shared_ptr<client>, const std::string&) = 0;
+		virtual void handle_read_error(std::shared_ptr<client>, const std::string&, error_code) = 0;
 		virtual void handle_write_error(std::shared_ptr<client>, const std::string&, error_code) = 0;
 	};
 
@@ -69,11 +70,7 @@ public:
 		ostream_adapter(std::shared_ptr<client> self) : std::stringstream(), self(self) {}
 		ostream_adapter(ostream_adapter&& out) : std::stringstream(std::move(out)), self(out.self) {}
 		ostream_adapter(const ostream_adapter&) = delete;
-		~ostream_adapter() {
-			std::string str = this->str();
-			self->async_write(str);
-			logger << self->name() << " << " << str;
-		}
+		~ostream_adapter() { self->async_write(str()); }
 	private:
 		std::shared_ptr<client> self;
 	};
@@ -100,7 +97,7 @@ public:
 					read_buffer_.erase(0, n);
 					async_read();
 				} else {
-					handler_->handle_read_error(self, ec);
+					handler_->handle_read_error(self, read_buffer_, ec);
 				}
 			});
 	}
@@ -118,6 +115,7 @@ private:
 			[this, self](error_code ec, size_t n) {
 				if (!ec) {
 					std::scoped_lock lock(mutex_);
+					handler_->handle_write(self, write_queue_.front());
 					write_queue_.pop_front();
 					if (write_queue_.size()) async_write();
 				} else {
@@ -259,11 +257,15 @@ protected:
 		}
 	}
 
-	virtual void handle_read_error(std::shared_ptr<client> self, error_code ec) {
+	virtual void handle_write(std::shared_ptr<client> self, const std::string& output) {
+		logger << self->name() << " << " << output; // output already contains '\n'
+	}
+
+	virtual void handle_read_error(std::shared_ptr<client> self, const std::string& buffer, error_code ec) {
 		if (self == find_client(self->name())) {
 			if (ec == boost::system::errc::success || ec == boost::asio::error::eof) {
 			} else {
-				logger << boost::format("exception at read error: %s") % ec << std::endl;
+				logger << boost::format("exception at read error: %s; %s") % ec % buffer << std::endl;
 			}
 			handle_client_logout(self);
 		} else {
@@ -363,7 +365,7 @@ private:
 
 int main(int argc, char *argv[]) {
 	try {
-		logger << "chat service version 2023-04-03 (protocol 0)" << std::endl;
+		logger << "chat service version 2023-06-09 (protocol 0)" << std::endl;
 
 		boost::asio::io_context io_context;
 		chat::server chat(io_context, argc < 2 ? 10000 : std::stoul(argv[1]));
