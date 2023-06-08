@@ -56,7 +56,7 @@ class client: public std::enable_shared_from_this<client> {
 public:
 	class handler {
 	public:
-		virtual void handle_command(std::shared_ptr<client>, const std::string&) = 0;
+		virtual void handle_read(std::shared_ptr<client>, const std::string&) = 0;
 		virtual void handle_read_error(std::shared_ptr<client>, error_code) = 0;
 		virtual void handle_write_error(std::shared_ptr<client>, const std::string&, error_code) = 0;
 	};
@@ -92,12 +92,12 @@ public:
 public:
 	void async_read() {
 		auto self(shared_from_this());
-		boost::asio::async_read_until(socket_, boost::asio::dynamic_buffer(buffer_), "\n",
+		boost::asio::async_read_until(socket_, boost::asio::dynamic_buffer(read_buffer_), "\n",
 			[this, self](error_code ec, size_t n) {
 				if (!ec) {
-					std::string input(buffer_.substr(0, n - 1));
-					handler_->handle_command(self, input);
-					buffer_.erase(0, n);
+					std::string input(read_buffer_.substr(0, n - 1));
+					handler_->handle_read(self, input);
+					read_buffer_.erase(0, n);
 					async_read();
 				} else {
 					handler_->handle_read_error(self, ec);
@@ -107,21 +107,21 @@ public:
 
 	void async_write(const std::string& data) {
 		std::scoped_lock lock(mutex_);
-		output_.emplace_back(data);
-		if (output_.size() == 1) async_write();
+		write_queue_.emplace_back(data);
+		if (write_queue_.size() == 1) async_write();
 	}
 
 private:
 	void async_write() {
 		auto self(shared_from_this());
-		boost::asio::async_write(socket_, boost::asio::buffer(output_.front()),
+		boost::asio::async_write(socket_, boost::asio::buffer(write_queue_.front()),
 			[this, self](error_code ec, size_t n) {
 				if (!ec) {
 					std::scoped_lock lock(mutex_);
-					output_.pop_front();
-					if (output_.size()) async_write();
+					write_queue_.pop_front();
+					if (write_queue_.size()) async_write();
 				} else {
-					handler_->handle_write_error(self, output_.front(), ec);
+					handler_->handle_write_error(self, write_queue_.front(), ec);
 				}
 			});
 	}
@@ -130,8 +130,8 @@ private:
 	tcp::socket socket_;
 	std::string name_;
 	handler* handler_;
-	std::string buffer_;
-	std::deque<std::string> output_;
+	std::string read_buffer_;
+	std::deque<std::string> write_queue_;
 	std::mutex mutex_;
 };
 
@@ -149,7 +149,7 @@ public:
 				if (!ec) {
 					boost::asio::socket_base::keep_alive option(true);
 					socket.set_option(option);
-					std::scoped_lock lock(clients_mutex_);
+					std::scoped_lock lock(mutex_);
 					std::string name;
 					while (find_client(name = "u" + std::to_string(++ticket_)) != nullptr);
 					std::shared_ptr<client> user = std::make_shared<client>(std::move(socket), name, this);
@@ -163,12 +163,12 @@ public:
 	}
 
 protected:
-	virtual void handle_command(std::shared_ptr<client> self, const std::string& line) {
-		logger << self->name() << " >> " << line << std::endl;
+	virtual void handle_read(std::shared_ptr<client> self, const std::string& input) {
+		logger << self->name() << " >> " << input << std::endl;
 
-		if (auto it = line.find('<'); it != std::string::npos) { // WHO << MESSAGE
-			std::string who = line.substr(0, it);
-			std::string msg = line.substr(std::min(line.find_first_not_of('<', it), line.length()));
+		if (auto it = input.find('<'); it != std::string::npos) { // WHO << MESSAGE
+			std::string who = input.substr(0, it);
+			std::string msg = input.substr(std::min(input.find_first_not_of('<', it), input.length()));
 			boost::trim(who);
 			msg.erase(0, msg.find(' ') ? 0 : 1);
 
@@ -203,7 +203,7 @@ protected:
 			return;
 		}
 
-		std::stringstream parser(line);
+		std::stringstream parser(input);
 		std::string cmd;
 		parser >> cmd;
 
@@ -271,17 +271,17 @@ protected:
 		}
 	}
 
-	virtual void handle_write_error(std::shared_ptr<client> self, const std::string& str, error_code ec) {
+	virtual void handle_write_error(std::shared_ptr<client> self, const std::string& output, error_code ec) {
 		if (self == find_client(self->name())) {
-			if (str.find(" > ") != std::string::npos) {
-				std::string src = str.substr(0, str.find(" > "));
-				std::string msg = str.substr(str.find(" > ") + 3);
+			if (output.find(" > ") != std::string::npos) {
+				std::string src = output.substr(0, output.find(" > "));
+				std::string msg = output.substr(output.find(" > ") + 3);
 				auto source = find_client(src);
 				if (source) {
 					source->reply() << boost::format("failed chat: remote error") << std::endl;
 				}
 			}
-			logger << boost::format("exception at write error: %s; %s") % ec % str << std::endl;
+			logger << boost::format("exception at write error: %s; %s") % ec % output << std::endl;
 			handle_client_logout(self);
 		} else {
 			logger << boost::format("mismatched client %s on write error") % self->name() << std::endl;
@@ -319,18 +319,18 @@ protected:
 
 private:
 	std::shared_ptr<client> find_client(const std::string& name) {
-		std::scoped_lock lock(clients_mutex_);
+		std::scoped_lock lock(mutex_);
 		auto it = clients_.find(name);
 		return it != clients_.end() ? it->second : nullptr;
 	}
 	std::vector<std::shared_ptr<client>> list_clients() {
-		std::scoped_lock lock(clients_mutex_);
+		std::scoped_lock lock(mutex_);
 		std::vector<std::shared_ptr<client>> users;
 		for (const auto& pair : clients_) users.push_back(pair.second);
 		return users;
 	}
 	bool rename_client(std::shared_ptr<client> user, const std::string& after) {
-		std::scoped_lock lock(clients_mutex_);
+		std::scoped_lock lock(mutex_);
 		if (find_client(user->name()) != user) return false;
 		if (find_client(after) != nullptr) return false;
 		auto hdr = clients_.extract(user->name());
@@ -340,13 +340,13 @@ private:
 		return true;
 	}
 	bool insert_client(std::shared_ptr<client> user) {
-		std::scoped_lock lock(clients_mutex_);
+		std::scoped_lock lock(mutex_);
 		if (find_client(user->name()) != nullptr) return false;
 		clients_.insert({user->name(), user});
 		return true;
 	}
 	bool remove_client(std::shared_ptr<client> user) {
-		std::scoped_lock lock(clients_mutex_);
+		std::scoped_lock lock(mutex_);
 		if (find_client(user->name()) != user) return false;
 		clients_.erase(user->name());
 		return true;
@@ -355,7 +355,7 @@ private:
 private:
 	tcp::acceptor acceptor_;
 	std::map<std::string, std::shared_ptr<client>> clients_;
-	std::recursive_mutex clients_mutex_;
+	std::recursive_mutex mutex_;
 	size_t ticket_ = 0;
 };
 
