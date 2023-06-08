@@ -107,21 +107,21 @@ public:
 
 	void async_write(const std::string& data) {
 		std::scoped_lock lock(mutex_);
-		output_.emplace_back(std::make_shared<std::string>(data));
+		output_.emplace_back(data);
 		if (output_.size() == 1) async_write();
 	}
 
 private:
 	void async_write() {
 		auto self(shared_from_this());
-		boost::asio::async_write(socket_, boost::asio::buffer(*output_.front()),
+		boost::asio::async_write(socket_, boost::asio::buffer(output_.front()),
 			[this, self](error_code ec, size_t n) {
 				if (!ec) {
 					std::scoped_lock lock(mutex_);
 					output_.pop_front();
 					if (output_.size()) async_write();
 				} else {
-					handler_->handle_write_error(self, *output_.front(), ec);
+					handler_->handle_write_error(self, output_.front(), ec);
 				}
 			});
 	}
@@ -131,7 +131,7 @@ private:
 	std::string name_;
 	handler* handler_;
 	std::string buffer_;
-	std::deque<std::shared_ptr<std::string>> output_;
+	std::deque<std::string> output_;
 	std::mutex mutex_;
 };
 
