@@ -138,7 +138,7 @@ public:
 	server(boost::asio::io_context& io_context, unsigned short port) :
 			acceptor_(io_context, tcp::endpoint(tcp::v4(), port)) {
 		tcp::endpoint endpoint = acceptor_.local_endpoint();
-		logger << "chat service initialized: " << endpoint.address() << ':' << endpoint.port() << std::endl;
+		logger << "server initialized: " << endpoint.address() << ':' << endpoint.port() << std::endl;
 	}
 
 	void async_accept() {
@@ -366,7 +366,7 @@ private:
 
 int main(int argc, char *argv[]) {
 	try {
-		logger << "chat service version 2023-06-09 (protocol 0)" << std::endl;
+		logger << "chat::service version 2023-06-09 (protocol 0)" << std::endl;
 
 		boost::asio::io_context io_context;
 		chat::server chat(io_context, argc < 2 ? 10000 : std::stoul(argv[1]));
