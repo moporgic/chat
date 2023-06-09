@@ -2,7 +2,7 @@
 #include <string>
 #include <thread>
 #include <utility>
-#include <map>
+#include <unordered_map>
 #include <cctype>
 #include <mutex>
 #include <memory>
@@ -165,16 +165,16 @@ protected:
 		logger << self->name() << " >> " << input << std::endl;
 
 		if (auto it = input.find('<'); it != std::string::npos) { // WHO << MESSAGE
-			std::string who = input.substr(0, it);
-			std::string msg = input.substr(std::min(input.find_first_not_of('<', it), input.length()));
-			boost::trim(who);
-			msg.erase(0, msg.find(' ') ? 0 : 1);
+			auto wt = input.find_first_not_of(' '), mt = input.find_first_not_of('<', it);
+			std::string who = input.substr(wt, input.find_last_not_of(' ', it - 1) + 1 - wt);
+			std::string msg = input.substr(mt != std::string::npos ? mt + (input[mt] == ' ') : input.size());
 
 			std::shared_ptr<client> remote = find_client(who);
 			if (remote) {
 				remote->output() << boost::format("%s >> %s") % self->name() % msg << std::endl;
 
 			} else if (who.find_first_of("*?") != std::string::npos) {
+				boost::replace_all(who, ".", "\\.");
 				boost::replace_all(who, "*", ".*");
 				boost::replace_all(who, "?", ".");
 				std::regex broadcast(who);
@@ -328,6 +328,7 @@ private:
 	std::vector<std::shared_ptr<client>> list_clients() {
 		std::scoped_lock lock(mutex_);
 		std::vector<std::shared_ptr<client>> users;
+		users.reserve(clients_.size());
 		for (const auto& pair : clients_) users.push_back(pair.second);
 		return users;
 	}
@@ -356,7 +357,7 @@ private:
 
 private:
 	tcp::acceptor acceptor_;
-	std::map<std::string, std::shared_ptr<client>> clients_;
+	std::unordered_map<std::string, std::shared_ptr<client>> clients_;
 	std::recursive_mutex mutex_;
 	size_t ticket_ = 0;
 };
