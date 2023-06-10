@@ -166,7 +166,7 @@ protected:
 
 		if (auto it = input.find('<'); it != std::string::npos) { // WHO << MESSAGE
 			auto wt = input.find_first_not_of(' '), mt = input.find_first_not_of('<', it);
-			std::string who = input.substr(wt, input.find_last_not_of(' ', it - 1) + 1 - wt);
+			std::string who = input.substr(wt, std::min(input.find_last_not_of(' ', it - 1) + 1 - wt, it - wt));
 			std::string msg = input.substr(mt != std::string::npos ? mt + (input[mt] == ' ') : input.size());
 
 			std::shared_ptr<client> remote = find_client(who);
