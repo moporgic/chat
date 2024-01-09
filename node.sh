@@ -892,11 +892,11 @@ handle_extended_input() {
 }
 
 complete_input() {
-	if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
-		assign_requests
-	fi
 	if (( ${#pid[@]} )); then
 		fetch_responses
+	fi
+	if (( ${#queue[@]} )) && [[ ${state[@]} == *"idle"* ]]; then
+		assign_requests
 	fi
 	refresh_observations
 }
