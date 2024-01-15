@@ -4,6 +4,7 @@
 #include <utility>
 #include <unordered_map>
 #include <cctype>
+#include <atomic>
 #include <mutex>
 #include <memory>
 #include <functional>
@@ -88,6 +89,7 @@ public:
 
 public:
 	void async_read() {
+		if (read_until_.exchange(true)) return;
 		auto self(shared_from_this());
 		boost::asio::async_read_until(socket_, boost::asio::dynamic_buffer(read_buffer_), "\n",
 			[this, self](error_code ec, size_t n) {
@@ -95,7 +97,7 @@ public:
 					std::string input(read_buffer_.substr(0, n - 1));
 					handler_->handle_read(self, input);
 					read_buffer_.erase(0, n);
-					async_read();
+					if (read_until_.exchange(false)) async_read();
 				} else {
 					handler_->handle_read_error(self, read_buffer_, ec);
 				}
@@ -103,7 +105,7 @@ public:
 	}
 
 	void async_write(const std::string& data) {
-		std::scoped_lock lock(mutex_);
+		std::scoped_lock lock(write_mutex_);
 		write_queue_.emplace_back(data);
 		if (write_queue_.size() == 1) async_write();
 	}
@@ -114,7 +116,7 @@ private:
 		boost::asio::async_write(socket_, boost::asio::buffer(write_queue_.front()),
 			[this, self](error_code ec, size_t n) {
 				if (!ec) {
-					std::scoped_lock lock(mutex_);
+					std::scoped_lock lock(write_mutex_);
 					handler_->handle_write(self, write_queue_.front());
 					write_queue_.pop_front();
 					if (write_queue_.size()) async_write();
@@ -130,7 +132,8 @@ private:
 	handler* handler_;
 	std::string read_buffer_;
 	std::deque<std::string> write_queue_;
-	std::mutex mutex_;
+	std::atomic<bool> read_until_;
+	std::mutex write_mutex_;
 };
 
 class server : public client::handler {
