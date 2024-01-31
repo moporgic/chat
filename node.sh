@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2023-04-01 (protocol 0)"
+	log "chat::node version 2024-01-31 (protocol 0)"
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
@@ -383,7 +383,7 @@ handle_query_input() { # ^query (.+)$
 	local who=$2
 
 	if [ "$options" == "protocol" ] || [ "$options" == "version" ]; then
-		echo "$who << protocol 0 version 2023-04-01"
+		echo "$who << protocol 0 version 2024-01-31"
 		log "accept query protocol from $who"
 
 	elif [ "$options" == "overview" ]; then
