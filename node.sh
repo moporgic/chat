@@ -976,7 +976,7 @@ assign_requests() {
 
 		workers[$pref]=$(sort_idle_workers ${workers[$pref]})
 		worker=(${workers[$pref]})
-		[[ $worker ]] || continue
+		[[ $worker ]] || { [[ ${state[@]} == *"idle"* ]] && continue || break; }
 
 		if [[ $worker != $name ]]; then
 			request="$id {${cmd[$id]}}"
