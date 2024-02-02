@@ -89,7 +89,17 @@ public:
 
 public:
 	void async_read() {
-		if (read_until_.exchange(true)) return;
+		if (!read_continue_.exchange(true)) async_read_impl();
+	}
+
+	void async_write(const std::string& data) {
+		std::scoped_lock lock(mutex_);
+		write_queue_.emplace_back(data);
+		if (write_queue_.size() == 1) async_write_impl();
+	}
+
+private:
+	void async_read_impl() {
 		auto self(shared_from_this());
 		boost::asio::async_read_until(socket_, boost::asio::dynamic_buffer(read_buffer_), "\n",
 			[this, self](error_code ec, size_t n) {
@@ -97,29 +107,22 @@ public:
 					std::string input(read_buffer_.substr(0, n - 1));
 					handler_->handle_read(self, input);
 					read_buffer_.erase(0, n);
-					if (read_until_.exchange(false)) async_read();
+					if (read_continue_.load()) async_read_impl();
 				} else {
 					handler_->handle_read_error(self, read_buffer_, ec);
 				}
 			});
 	}
 
-	void async_write(const std::string& data) {
-		std::scoped_lock lock(write_mutex_);
-		write_queue_.emplace_back(data);
-		if (write_queue_.size() == 1) async_write();
-	}
-
-private:
-	void async_write() {
+	void async_write_impl() {
 		auto self(shared_from_this());
 		boost::asio::async_write(socket_, boost::asio::buffer(write_queue_.front()),
 			[this, self](error_code ec, size_t n) {
 				if (!ec) {
-					std::scoped_lock lock(write_mutex_);
+					std::scoped_lock lock(mutex_);
 					handler_->handle_write(self, write_queue_.front());
 					write_queue_.pop_front();
-					if (write_queue_.size()) async_write();
+					if (write_queue_.size()) async_write_impl();
 				} else {
 					handler_->handle_write_error(self, write_queue_.front(), ec);
 				}
@@ -132,8 +135,8 @@ private:
 	handler* handler_;
 	std::string read_buffer_;
 	std::deque<std::string> write_queue_;
-	std::atomic<bool> read_until_;
-	std::mutex write_mutex_;
+	std::atomic<bool> read_continue_ = false;
+	std::mutex mutex_;
 };
 
 class server : public client::handler {
@@ -369,7 +372,7 @@ private:
 
 int main(int argc, char *argv[]) {
 	try {
-		logger << "chat::service version 2024-01-15 (protocol 0)" << std::endl;
+		logger << "chat::service version 2024-02-02 (protocol 0)" << std::endl;
 
 		boost::asio::io_context io_context;
 		chat::server chat(io_context, argc < 2 ? 10000 : std::stoul(argv[1]));
