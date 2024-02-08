@@ -1211,6 +1211,7 @@ operate_eval() {
 set_config() {
 	local var=$1
 	local val=$2
+	list_system_variables | grep -q ^${var}$ && return 1
 	local show_val="$var[@]"
 	local val_old="${!show_val}"
 	eval $var="\"$val\""
@@ -1238,6 +1239,7 @@ set_config() {
 
 unset_config() {
 	local var=$1
+	list_system_variables | grep -q ^${var}$ && return 1
 	local show_val="$var[@]"
 	local val_old="${!show_val}"
 	eval $var=
@@ -1260,6 +1262,12 @@ unset_config() {
 	fi
 
 	return 0
+}
+
+list_system_variables() {
+	printf "%s\n" own cmd res assign prefer tmout tmdue hdue pid stdin stdout state hold news notify queue \
+	              overview lastview system_state system_status system_capacity size_details load_details stat_details \
+	              configs logfile tcp_fd res_fd exit_code registered message from info
 }
 
 init_configs() {
