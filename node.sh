@@ -353,7 +353,7 @@ handle_confirm_input() { # ^(accept|reject|confirm) (\S+) (.+)$
 			subscribe state $who
 			log "subscribed state for new broker $who"
 			observe_state
-			echo "$who << notify state ${system_state[@]}"
+			echo "$who << notify state ${system_state[@]} (${!cmd[@]})"
 		elif [ "$confirm" == "reject" ]; then
 			log "handshake failed, unsupported protocol; shutdown"
 			exit_code=2
