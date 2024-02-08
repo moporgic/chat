@@ -56,7 +56,7 @@ session() {
 	declare -a load_details=() # [A]=2/4 [B]=8/16 ...
 	declare -a stat_details=() # [A]=idle:2/4 [B]=idle:8/16 ...
 
-	declare registered
+	declare pending="register"
 
 	log "verify chat system protocol 0..."
 	echo "protocol 0"
@@ -819,8 +819,7 @@ handle_chat_operation() { # ^(.+)$
 	elif [[ "$info" == "name: "* ]]; then
 		name=${info:6}
 		log "registered as $name successfully"
-		if [[ ! $registered ]]; then
-			init_register $name
+		if [[ $pending == register ]] && init_register $name; then
 			foreach contact_broker ${brokers[@]}
 			foreach contact_worker ${workers[@]}
 		fi
@@ -828,28 +827,31 @@ handle_chat_operation() { # ^(.+)$
 	elif [[ "$info" == "who: "* ]]; then
 		local online=(${info:5})
 
-		if [[ ! $registered ]]; then
+		if [[ $pending == register ]]; then
 			name=$(name)
 			while contains online $name; do name=${name%-*}-$((${name##*-}+1)); done
 			log "register node${name:+ $name} on the chat system..."
 			echo "name${name:+ $name}"
+
+		elif [[ $pending == check_online ]]; then
+			pending=
+			local clients=($(printf "%s\n" ${own[@]} ${!state[@]} $(printf "%s\n" ${!news[@]} | sed -E "s/[^-]+-//") | sort -u))
+			erase_from clients ${online[@]}
+
+			local who
+			for who in $(printf "%s\n" ${clients[@]} | sort -u); do
+				log "$who disconnected unexpectedly"
+				node_logout $who
+			done
 		fi
 
-		local unexpectedly=($(printf "%s\n" ${own[@]} ${!state[@]} $(printf "%s\n" ${!news[@]} | sed -E "s/[^-]+-//") | sort -u))
-		erase_from unexpectedly ${online[@]}
-
-		local who
-		for who in $(printf "%s\n" ${unexpectedly[@]} | sort -u); do
-			log "$who disconnected unexpectedly"
-			node_logout $who
-		done
-
 	elif [[ "$info" == "failed name"* ]]; then
-		registered=
+		pending=register
 		log "name${name:+ $name} has been occupied, query online names..."
 		echo "who"
 
 	elif [[ "$info" == "failed chat"* ]]; then
+		pending=${pending:-check_online}
 		log "failed chat, check online names..."
 		echo "who"
 
@@ -1267,7 +1269,7 @@ unset_config() {
 list_system_variables() {
 	printf "%s\n" own cmd res assign prefer tmout tmdue hdue pid stdin stdout state hold news notify queue \
 	              overview lastview system_state system_status system_capacity size_details load_details stat_details \
-	              configs logfile tcp_fd res_fd exit_code registered message from info
+	              configs logfile tcp_fd res_fd exit_code pending message from info
 }
 
 init_configs() {
@@ -1286,11 +1288,13 @@ init_configs() {
 
 init_register() {
 	local name=$1
-	registered=$name
+	[[ $pending == register ]] || return 1
+	pending=
 	set_capacity ${capacity}
 	set_affinity ${affinity:-0}
 	observe_overview; observe_status
 	log "initialized: state ${system_status[@]}"
+	return 0
 }
 
 set_capacity() {
