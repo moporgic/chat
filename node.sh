@@ -35,7 +35,6 @@ main() {
 	declare -A notify # [type]=subscriber...
 	declare -a queue # id...
 
-	declare id_next
 	declare tcp_fd
 	declare res_fd
 	declare exit_code
@@ -56,10 +55,10 @@ session() {
 	declare -a load_details=() # [A]=2/4 [B]=8/16 ...
 	declare -a stat_details=() # [A]=idle:2/4 [B]=idle:8/16 ...
 
-	declare pending="register"
+	declare pending
+	declare id_next
 
-	log "verify chat system protocol 0..."
-	echo "protocol 0"
+	init_session || return $((exit_code=$?))
 
 	local message from info
 	while input message; do
@@ -1284,6 +1283,15 @@ init_configs() {
 			capacity=
 		fi
 	fi
+}
+
+init_session() {
+	pending="register"
+	id_next=${id_next:-$(($(IFS=$'\n'; sort -n <<< ${!cmd[*]} | tail -1)+1))}
+
+	log "verify chat system protocol 0..."
+	echo "protocol 0"
+	return 0
 }
 
 init_register() {
