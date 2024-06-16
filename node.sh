@@ -1218,7 +1218,7 @@ operate_eval() {
 set_config() {
 	local var=$1
 	local val=$2
-	list_system_variables | grep -q ^${var}$ && return 1
+	list_protected_variables | grep -q ^${var}$ && return 1
 	local show_val="$var[@]"
 	local val_old="${!show_val}"
 	eval $var="\"$val\""
@@ -1246,7 +1246,7 @@ set_config() {
 
 unset_config() {
 	local var=$1
-	list_system_variables | grep -q ^${var}$ && return 1
+	list_protected_variables | grep -q ^${var}$ && return 1
 	local show_val="$var[@]"
 	local val_old="${!show_val}"
 	eval $var=
@@ -1272,6 +1272,13 @@ unset_config() {
 }
 
 list_system_variables() {
+	printf "%s\n" name mode configs brokers workers capacity affinity plugins logfile \
+	              own cmd res assign prefer tmout tmdue hdue pid stdin stdout state hold news notify queue \
+	              overview lastview system_state system_status system_capacity size_details load_details stat_details \
+	              tcp_fd res_fd exit_code pending message from info
+}
+
+list_protected_variables() {
 	printf "%s\n" own cmd res assign prefer tmout tmdue hdue pid stdin stdout state hold news notify queue \
 	              overview lastview system_state system_status system_capacity size_details load_details stat_details \
 	              configs logfile tcp_fd res_fd exit_code pending message from info
