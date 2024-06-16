@@ -1904,9 +1904,13 @@ override() {
 }
 
 invoke_overridden() {
-	local level=${invoke_level:-${1}_override_level}
-	(( level-- )) || return 255
-	invoke_level=$level ${1}_override_$level "${@:2}"
+    local level=${1}_invoke_level
+    local override=${1}_override_level
+    [ -v $level ] || local $level
+    local -n level=$level
+    [[ $level ]] || level=${!override}
+    (( level-- )) || return 255
+    ${1}_override_${level} "${@:2}"
 }
 
 undo_override() {
