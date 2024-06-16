@@ -850,9 +850,11 @@ handle_chat_operation() { # ^(.+)$
 		echo "who"
 
 	elif [[ "$info" == "failed chat"* ]]; then
-		pending=${pending:-check_online}
-		log "failed chat, check online names..."
-		echo "who"
+		if [[ ! $pending ]]; then
+			pending=check_online
+			log "failed chat, check online names..."
+			echo "who"
+		fi
 
 	elif [[ "$info" == "failed protocol"* ]]; then
 		log "unsupported protocol; shutdown"
