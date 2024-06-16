@@ -676,12 +676,14 @@ handle_operate_input() { # ^operate (.+)$
 		if [[ " ${matches[@]} " == *" $name "* ]]; then
 			if [ "$type" == "shutdown" ]; then
 				log "$(name) is shutting down..."
+				pending=shutdown
 				prepare_shutdown
 				exit_code=${exit_code:-0}
 				return 255
 
 			elif [ "$type" == "restart" ]; then
 				log "$(name) is restarting..."
+				pending=restart
 				prepare_restart
 				local vars=() args=()
 				args_of ${configs[@]} >/dev/null
