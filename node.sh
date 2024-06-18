@@ -202,7 +202,7 @@ handle_terminate_input() { # ^terminate (.+)$
 		erase_from ids ${!res[@]}
 	fi
 	if [[ ${ids[@]} ]]; then
-		printf "$who << accept terminate %d\n" ${ids[@]}
+		printf -- "$who << accept terminate %d\n" ${ids[@]}
 		log "accept terminate ${ids[@]} from $who"
 		for id in ${ids[@]}; do
 			terminate $id
@@ -492,7 +492,7 @@ handle_query_input() { # ^query (.+)$
 		local vars=() args=()
 		args_of ${BASH_REMATCH[2]:-${configs[@]}} >/dev/null
 		echo "$who << options = (${vars[@]})"
-		[[ ${args[@]} ]] && printf "$who << # %s\n" "${args[@]}"
+		[[ ${args[@]} ]] && printf -- "$who << # %s\n" "${args[@]}"
 		log "accept query options from $who, options = ($(omit ${vars[@]}))"
 	} &
 	elif [[ "$options" =~ ^declare(.*)$ ]] ; then
