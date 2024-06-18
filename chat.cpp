@@ -372,7 +372,7 @@ private:
 
 int main(int argc, char *argv[]) {
 	try {
-		logger << "chat::service version 2024-02-02 (protocol 0)" << std::endl;
+		logger << "chat::service version 2024-02-02" << std::endl;
 
 		boost::asio::io_context io_context;
 		chat::server chat(io_context, argc < 2 ? 10000 : std::stoul(argv[1]));
