@@ -219,7 +219,7 @@ protected:
 			if (name.empty() || name == old) {
 				self->reply() << boost::format("name: %s") % self->name() << std::endl;
 			} else {
-				auto legal = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/_.+-";
+				auto legal = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/_.:+-";
 				if (name.find_first_not_of(legal) == std::string::npos && rename_client(self, name)) {
 					self->reply() << boost::format("name: %s") % self->name() << std::endl;
 					for (auto user : list_clients()) {
