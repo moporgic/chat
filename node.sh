@@ -831,7 +831,12 @@ handle_chat_operation() { # ^(.+)$
 		if [[ $pending == register ]]; then
 			name=$(name)
 			while contains online $name; do
-				[[ $name =~ [0-9]+$ ]] && name=${name%$BASH_REMATCH}$((BASH_REMATCH+1)) || name+=-1
+				if [[ $name =~ [0-9]+$ ]]; then
+					local idx=$BASH_REMATCH
+					name=${name%$idx}$(printf "%0${#idx}d" $((1${idx}-1${idx//?/0}+1)))
+				else
+					name+=-1
+				fi
 			done
 			log "register node${name:+ $name} on the chat system..."
 			echo "name${name:+ $name}"
