@@ -65,7 +65,7 @@ session() {
 		from=${message%% *}
 		info=${message#* >> }
 
-		if handle_${info%% *}_input "$info" "$from" || handle_extended_input "$info" "$from"; then
+		if handle_${info%% *}_input "$info" "$from"; then
 			complete_input
 		else
 			[[ $exit_code ]] && return $exit_code
@@ -896,12 +896,6 @@ eval 'handle_%_input() {
 eval 'handle__input() {
 	handle_noinput
 }'
-
-handle_extended_input() {
-	local info=$1
-	local from=$2
-	return 1
-}
 
 complete_input() {
 	if (( ${#pid[@]} )); then
