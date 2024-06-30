@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2024-06-18"
+	log "chat::node version 2024-06-30"
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
@@ -65,7 +65,7 @@ session() {
 		from=${message%% *}
 		info=${message#* >> }
 
-		handle_${info%% *}_input "$info" "$from" && complete_input && continue
+		handle_${info%% *}_input && complete_input && continue
 		[[ $exit_code ]] && return $exit_code
 		log "failed to handle input: $message"
 	done
@@ -76,9 +76,9 @@ session() {
 
 handle_request_input() { # ^request (([0-9]+) )?(\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$
 	local regex_request="^request (([0-9]+) )?(\{(.*)\}( with( ([^{}]+)| ?))?|(.+))$"
-	[[ $1 =~ $regex_request ]] || return 1
+	[[ $info =~ $regex_request ]] || return 1
 
-	local owner=$2
+	local owner=$from
 	local id=${BASH_REMATCH[2]}
 	local command=${BASH_REMATCH[4]:-${BASH_REMATCH[8]}}
 	local options=${BASH_REMATCH[7]}
@@ -147,8 +147,8 @@ handle_request_input() { # ^request (([0-9]+) )?(\{(.*)\}( with( ([^{}]+)| ?))?|
 }
 
 handle_response_input() { # ^response (\S+) (\S+) \{(.*)\}$
-	local what id code output worker=$2
-	IFS=' ' read -r what id code output <<< $1 || return 1
+	local what id code output worker=$from
+	IFS=' ' read -r what id code output <<< $info || return 1
 	[ "${output:0:1}$what${output: -1}" == "{response}" ] || return 1
 	output=${output:1:-1}
 
@@ -188,8 +188,8 @@ handle_response_input() { # ^response (\S+) (\S+) \{(.*)\}$
 }
 
 handle_terminate_input() { # ^terminate (.+)$
-	local id=${1#* }
-	local who=$2
+	local id=${info#* }
+	local who=$from
 
 	local ids=()
 	if [[ ${own[$id]} == $who ]] && [[ ! -v res[$id] ]]; then
@@ -218,8 +218,8 @@ handle_terminate_input() { # ^terminate (.+)$
 }
 
 handle_notify_input() { # ^notify state (idle|busy|full) (\S+)/(\S+)( \((.*)\))?$
-	local label what stat load size owned worker=$2
-	IFS=' ' read -r label what stat load size owned <<< "${1/\// }" || return 1
+	local label what stat load size owned worker=$from
+	IFS=' ' read -r label what stat load size owned <<< "${info/\// }" || return 1
 
 	[ "$label $what" == "notify state" ] || return 1
 
@@ -255,9 +255,9 @@ handle_notify_input() { # ^notify state (idle|busy|full) (\S+)/(\S+)( \((.*)\))?
 
 handle_confirm_input() { # ^(accept|reject|confirm) (\S+) (.+)$
 	local confirm what option
-	IFS=' ' read -r confirm what option <<< $1 || return 1
+	IFS=' ' read -r confirm what option <<< $info || return 1
 	local id=$option
-	local who=$2
+	local who=$from
 
 	if [ "$what" == "state" ]; then
 		log "confirm that $who ${confirm}ed state $option"
@@ -367,19 +367,19 @@ handle_confirm_input() { # ^(accept|reject|confirm) (\S+) (.+)$
 }
 
 handle_accept_input() {
-	handle_confirm_input "$@"
+	handle_confirm_input
 }
 
 handle_reject_input() {
-	handle_confirm_input "$@"
+	handle_confirm_input
 }
 
 handle_query_input() { # ^query (.+)$
-	local options=${1#* }
-	local who=$2
+	local options=${info#* }
+	local who=$from
 
 	if [ "$options" == "protocol" ] || [ "$options" == "version" ]; then
-		echo "$who << protocol 0 version 2024-06-18"
+		echo "$who << protocol 0 version 2024-06-30"
 		log "accept query protocol from $who"
 
 	elif [ "$options" == "overview" ]; then
@@ -510,16 +510,20 @@ handle_query_input() { # ^query (.+)$
 		log "accept query envinfo from $who, envinfo = ($envitem)"
 	} &
 	else # assume query options
-		[[ $options != $1 ]] && handle_query_input "query options $options" "$who"
-		return $?
+		if [[ $options != $info ]]; then
+			info="query options $options"
+			from="$who"
+			handle_query_input && return 0
+		fi
+		return 1
 	fi
 
 	return 0
 }
 
 handle_report_input() { # ^report (.+)$
-	local options=${1#* }
-	local who=$2
+	local options=${info#* }
+	local who=$from
 
 	if [ "$options" == "state" ]; then
 		log "accept report state from $who"
@@ -552,9 +556,9 @@ handle_report_input() { # ^report (.+)$
 }
 
 handle_subscribe_input() { # ^(subscribe|unsubscribe) (.+)$
-	local command=${1%% *}
-	local options=${1#* }
-	local who=$2
+	local command=${info%% *}
+	local options=${info#* }
+	local who=$from
 
 	if [ "$command" == "subscribe" ]; then
 		if [[ $options =~ ^(state|status|idle|assign|capacity)$ ]]; then
@@ -598,13 +602,13 @@ handle_subscribe_input() { # ^(subscribe|unsubscribe) (.+)$
 }
 
 handle_unsubscribe_input() {
-	handle_subscribe_input "$@"
+	handle_subscribe_input
 }
 
 handle_set_input() { # ^(set|unset) (.+)$
-	local command=${1%% *}
-	local options=${1#* }
-	local who=$2
+	local command=${info%% *}
+	local options=${info#* }
+	local who=$from
 
 	if [ "$command" == "set" ]; then
 		local var=(${options/=/ })
@@ -631,12 +635,12 @@ handle_set_input() { # ^(set|unset) (.+)$
 }
 
 handle_unset_input() {
-	handle_set_input "$@"
+	handle_set_input
 }
 
 handle_use_input() { # ^use (.+)$
-	local options=${1#* }
-	local who=$2
+	local options=${info#* }
+	local who=$from
 
 	if [[ "$options" == "protocol "* ]]; then
 		local protocol=${options:9}
@@ -655,8 +659,8 @@ handle_use_input() { # ^use (.+)$
 }
 
 handle_operate_input() { # ^operate (.+)$
-	local options=${1#* }
-	local who=$2
+	local options=${info#* }
+	local who=$from
 
 	if [[ "$options" =~ ^(shutdown|restart)(\ (.+))?$ ]]; then
 		local type=${BASH_REMATCH[1]}
@@ -733,7 +737,10 @@ handle_operate_input() { # ^operate (.+)$
 		fi
 
 	elif [[ "$options" == "shell "* ]]; then
-		handle_shell_input "$options" "$who"
+		info="$options"
+		from="$who"
+		handle_shell_input
+		return $?
 
 	elif [[ "$options" == "input "* ]]; then
 		local input=${options:6}
@@ -742,7 +749,7 @@ handle_operate_input() { # ^operate (.+)$
 		message=$input
 		from=${message%% *}
 		info=${message#* >> }
-		handle_${info%% *}_input "$info" "$from"
+		handle_${info%% *}_input
 		return $?
 
 	elif [[ "$options" == "output "* ]]; then
@@ -759,8 +766,8 @@ handle_operate_input() { # ^operate (.+)$
 }
 
 handle_shell_input() { # ^shell (.+)$
-	local shell=${1#shell }
-	local who=$2
+	local shell=${info#shell }
+	local who=$from
 
 	[[ ${shell:0:1}${shell: -1} == {} ]] && shell=${shell:1:-1}
 	echo "$who << accept execute shell {$shell}"
@@ -778,8 +785,8 @@ handle_shell_input() { # ^shell (.+)$
 
 
 handle_chat_notification() { # ^(.+)$
-	local info=$1
-	local type=$2
+	local info=$info
+	local type=$from
 
 	[ "$type" == "#" ] || return 1
 
@@ -804,8 +811,8 @@ handle_chat_notification() { # ^(.+)$
 }
 
 handle_chat_operation() { # ^(.+)$
-	local info=$1
-	local type=$2
+	local info=$info
+	local type=$from
 
 	[ "$type" == "%" ] || return 1
 
@@ -883,11 +890,13 @@ handle_noinput() {
 }
 
 eval 'handle_#_input() {
-	handle_chat_notification "${1:2}" "$2"
+	info=${info:2}
+	handle_chat_notification
 }'
 
 eval 'handle_%_input() {
-	handle_chat_operation "${1:2}" "$2"
+	info=${info:2}
+	handle_chat_operation
 }'
 
 eval 'handle__input() {
