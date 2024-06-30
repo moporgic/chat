@@ -65,12 +65,9 @@ session() {
 		from=${message%% *}
 		info=${message#* >> }
 
-		if handle_${info%% *}_input "$info" "$from"; then
-			complete_input
-		else
-			[[ $exit_code ]] && return $exit_code
-			log "ignore message: $message"
-		fi
+		handle_${info%% *}_input "$info" "$from" && complete_input && continue
+		[[ $exit_code ]] && return $exit_code
+		log "failed to handle input: $message"
 	done
 
 	log "message input terminated unexpectedly"
@@ -905,6 +902,7 @@ complete_input() {
 		assign_requests
 	fi
 	refresh_observations
+	return 0
 }
 
 confirm_request() {
