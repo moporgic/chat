@@ -12,7 +12,7 @@ main() {
 	declare plugins=${plugins}
 	declare logfile=${logfile}
 
-	log "chat::node version 2024-06-30"
+	log "chat::node version $(version)"
 	args_of ${configs[@]} | xargs_eval log "option:"
 	envinfo | xargs_eval log "platform"
 	foreach source ${plugins//:/ } >/dev/null
@@ -379,7 +379,7 @@ handle_query_input() { # ^query (.+)$
 	local who=$from
 
 	if [ "$options" == "protocol" ] || [ "$options" == "version" ]; then
-		echo "$who << protocol 0 version 2024-06-30"
+		echo "$who << protocol $(protocol) version $(version)"
 		log "accept query protocol from $who"
 
 	elif [ "$options" == "overview" ]; then
@@ -1308,8 +1308,8 @@ init_session() {
 	pending="register"
 	id_next=${id_next:-$(($(IFS=$'\n'; sort -n <<< ${!cmd[*]} | tail -1)+1))}
 
-	log "verify chat system protocol 0..."
-	echo "protocol 0"
+	log "verify chat system protocol $(protocol)..."
+	echo "protocol $(protocol)"
 	return 0
 }
 
@@ -1497,8 +1497,8 @@ change_workers() {
 contact_broker() {
 	local broker=${1?}
 	if [[ $broker != $name ]]; then
-		log "contact $broker for handshake (protocol 0)"
-		echo "$broker << use protocol 0"
+		log "contact $broker for handshake (protocol $(protocol))"
+		echo "$broker << use protocol $(protocol)"
 	fi
 }
 
@@ -1975,6 +1975,10 @@ envinfo() {
 }
 
 name() { echo ${name:-$(basename "$0" .sh)}; }
+
+protocol() { echo "0"; }
+
+version() { echo "2024-06-30"; }
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
 
