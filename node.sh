@@ -343,7 +343,7 @@ handle_confirm_input() { # ^(accept|reject|confirm) (\S+) (.+)$
 			log "ignore that $who ${confirm}ed $what $id since no such $what"
 		fi
 
-	elif [ "$what" == "protocol" ]; then
+	elif [ "$what" == "protocol" ] || [ "$what" == "version" ]; then
 		if [ "$confirm" == "accept" ]; then
 			log "handshake with $who successfully"
 			subscribe state $who
@@ -351,7 +351,7 @@ handle_confirm_input() { # ^(accept|reject|confirm) (\S+) (.+)$
 			observe_state
 			echo "$who << notify state ${system_state[@]} (${!cmd[@]})"
 		elif [ "$confirm" == "reject" ]; then
-			log "handshake failed, unsupported protocol; shutdown"
+			log "handshake failed, unsupported $what; shutdown"
 			exit_code=2
 			return 255
 		fi
@@ -642,14 +642,22 @@ handle_use_input() { # ^use (.+)$
 	local options=${info#* }
 	local who=$from
 
-	if [[ "$options" == "protocol "* ]]; then
-		local protocol=${options:9}
-		if [ "$protocol" == "0" ]; then
-			echo "$who << accept protocol $protocol"
-			log "accept use protocol $protocol from $who"
-		else
+	if [[ $options =~ ^protocol\ ([^ ]+)(\ version\ ([^ ]+))?$|^version\ ([^ ]+)$ ]]; then
+		local protocol=${BASH_REMATCH[1]:-$(protocol)}
+		local version=${BASH_REMATCH[3]:-${BASH_REMATCH[4]:-$(version)}}
+
+		if [[ $protocol == 0 ]] && (( ${version//-/} >= 20240630 )) 2>/dev/null; then
+			echo "$who << accept $options"
+			log "accept use $options from $who"
+		elif [[ $protocol != 0 ]]; then
 			echo "$who << reject protocol $protocol"
 			log "reject use protocol $protocol from $who, unsupported protocol"
+		elif [[ $version ]]; then
+			echo "$who << reject version $version"
+			log "reject use version $version from $who, unsupported version"
+		else
+			echo "$who << reject $options"
+			log "reject use $options from $who"
 		fi
 	else
 		return 1
@@ -1497,8 +1505,8 @@ change_workers() {
 contact_broker() {
 	local broker=${1?}
 	if [[ $broker != $name ]]; then
-		log "contact $broker for handshake (protocol $(protocol))"
-		echo "$broker << use protocol $(protocol)"
+		log "contact $broker for handshake (protocol $(protocol) version $(version))"
+		echo "$broker << use protocol $(protocol) version $(version)"
 	fi
 }
 
