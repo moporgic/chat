@@ -1721,9 +1721,16 @@ unpack() {
 	return $code
 }
 
+backtrace() {
+	local i
+	for (( i=1; i<${#FUNCNAME[@]}; i++ )); do
+		printf "#%d in %s() at %s:%s\n" $i ${FUNCNAME[$i]} ${BASH_SOURCE[$i]} ${BASH_LINENO[$i-1]}
+	done
+}
+
 init_system_io() {
-	trap 'log "$(name) has been interrupted"; exit 64' INT
-	trap 'log "$(name) has been terminated"; exit 64' TERM
+	trap 'log "$(name) has been interrupted, backtrace:"; backtrace | xargs_eval log; exit 64' INT
+	trap 'log "$(name) has been terminated, backtrace:"; backtrace | xargs_eval log"; exit 64' TERM
 	trap 'code=$?; cleanup; log "$(name) is terminated"; exit $code' EXIT
 
 	local endpoint=$(printf "%s\n" "$addr:$port" "${configs[@]}" | grep -E "^([^:=]+):([0-9]+)$")
