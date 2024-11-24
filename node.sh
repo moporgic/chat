@@ -1925,13 +1925,13 @@ override() {
 }
 
 invoke_overridden() {
-    local level=${1}_invoke_level
-    local override=${1}_override_level
-    [ -v $level ] || local $level
-    local -n level=$level
-    [[ $level ]] || level=${!override}
-    (( level-- )) || return 255
-    ${1}_override_${level} "${@:2}"
+	local level=${1}_invoke_level
+	local override=${1}_override_level
+	[ -v $level ] || local $level
+	local -n level=$level
+	[[ $level ]] || level=${!override}
+	(( level-- )) || return 255
+	${1}_override_${level} "${@:2}"
 }
 
 undo_override() {
@@ -1990,20 +1990,31 @@ version() { echo "2024-06-30"; }
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
 
-override log
-log() {
+init_log() {
 	logfile=${logfile:-$(name)_$(date '+%Y%m%d_%H%M%S_%3N').log}
-	if exec 3>> "$logfile" && flock -xn 3; then
+	if [ "$logfile" != /dev/null ] && exec 3>> "$logfile" && flock -xn 3; then
 		override cleanup
 		cleanup() { invoke_overridden cleanup; flock -u 3 2>/dev/null; }
 		exec 2> >(trap '' INT TERM; exec tee /dev/fd/2 >&3)
+	elif [ "$(readlink /dev/fd/2)" == /dev/null ]; then
+		override log
+		log() { :; }
+		if [[ $aggressive_silence ]]; then
+			local fun
+			for fun in $(declare -F | cut -d' ' -f3); do
+				eval "$(declare -f $fun | sed -E 's/log\s"([^"]|\\"|"\s+")+"/:/g')"
+			done
+		fi
 	fi
-
-	undo_override log
-	log "$@"
 }
 
 #### script main ####
 if [ "$0" == "$BASH_SOURCE" ]; then
+	override log
+	log() {
+		undo_override log
+		init_log
+		log "$@"
+	}
 	main "$@"
 fi
