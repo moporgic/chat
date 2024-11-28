@@ -923,6 +923,11 @@ complete_input() {
 	return 0
 }
 
+command_not_found_handle() {
+	[[ $1 != handle_*_input ]] && echo "$(basename $0): $1: command not found" >&2
+	return 127
+}
+
 confirm_request() {
 	local id=$1
 	return 0
@@ -1656,6 +1661,15 @@ node_rename() {
 	mvfx log_src log
 }
 
+check_protocol() {
+	local protocol=$1
+	local version=$2
+	[[ $protocol == 0 ]] || return 1
+	[[ $version =~ ^([0-9][0-9][0-9][0-9])-?([0-9][0-9])-?([0-9][0-9]) ]] || return 2
+	(( $(printf "%d%d%d" ${BASH_REMATCH[@]:1}) >= 20240630 )) 2>/dev/null || return 2
+	return 0
+}
+
 app() {
 	local app=$1
 	[[ $app ]] || return 127
@@ -1706,27 +1720,15 @@ pkg-get() {
 	return $code
 }
 
-unpack() {
-	local code=0 pkg
-	for pkg in "$@"; do
-		case "${pkg,,}" in
-		*.tar.xz|*.txz)	tar Jxf "$pkg"; ;;
-		*.tar.gz|*.tgz)	tar zxf "$pkg"; ;;
-		*.tar)	tar xf "$pkg"; ;;
-		*.xz)	xz -kd "$pkg"; ;;
-		*.gz)	gzip -kd "$pkg"; ;;
-		*.zip)	unzip -q -o "$pkg"; ;;
-		*.7z)	7za x -y "$pkg" >/dev/null; ;;
-		esac; code=$(($?|code))
-	done
-	return $code
-}
-
-backtrace() {
-	local i
-	for (( i=1; i<${#FUNCNAME[@]}; i++ )); do
-		printf "#%d in %s() at %s:%s\n" $i ${FUNCNAME[$i]} ${BASH_SOURCE[$i]} ${BASH_LINENO[$i-1]}
-	done
+input() {
+	if read -r -t 0; then
+		IFS= read -r ${1:-message}
+		return $?
+	else
+		sleep ${system_tick:-0.1}
+		eval ${1:-message}=
+		return 0
+	fi
 }
 
 init_system_io() {
@@ -1783,16 +1785,31 @@ init_system_io() {
 	return 0
 }
 
-input() {
-	if read -r -t 0; then
-		IFS= read -r ${1:-message}
-		return $?
-	else
-		sleep ${system_tick:-0.1}
-		eval ${1:-message}=
-		return 0
+init_log() {
+	logfile=${logfile:-$(name)_$(date '+%Y%m%d_%H%M%S_%3N').log}
+	if [ "$logfile" != /dev/null ] && exec 3>> "$logfile" && flock -xn 3; then
+		override cleanup
+		cleanup() { invoke_overridden cleanup; flock -u 3 2>/dev/null; }
+		exec 2> >(trap '' INT TERM; exec tee /dev/fd/2 >&3)
+	elif [ "$(readlink /dev/fd/2)" == /dev/null ]; then
+		override log
+		log() { :; }
+		if [[ $aggressive_silence ]]; then
+			local fun
+			for fun in $(declare -F | cut -d' ' -f3); do
+				eval "$(declare -f $fun | sed -E 's/log\s"([^"]|\\"|"\s+")+"/:/g')"
+			done
+		fi
 	fi
 }
+
+log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
+
+protocol() { echo "0"; }
+
+version() { echo "2024-11-28"; }
+
+name() { echo ${name:-$(basename "$0" .sh)}; }
 
 cleanup() { :; }
 
@@ -1837,6 +1854,22 @@ declare_of() {
 			erase_from vars $var_
 		fi
 	done
+}
+
+unpack() {
+	local code=0 pkg
+	for pkg in "$@"; do
+		case "${pkg,,}" in
+		*.tar.xz|*.txz)	tar Jxf "$pkg"; ;;
+		*.tar.gz|*.tgz)	tar zxf "$pkg"; ;;
+		*.tar)	tar xf "$pkg"; ;;
+		*.xz)	xz -kd "$pkg"; ;;
+		*.gz)	gzip -kd "$pkg"; ;;
+		*.zip)	unzip -q -o "$pkg"; ;;
+		*.7z)	7za x -y "$pkg" >/dev/null; ;;
+		esac; code=$(($?|code))
+	done
+	return $code
 }
 
 omit() {
@@ -1921,11 +1954,6 @@ xargs_eval() {
 	[[ $item ]] && eval "$exec"
 }
 
-command_not_found_handle() {
-	[[ $1 != handle_*_input ]] && echo "$(basename $0): $1: command not found" >&2
-	return 127
-}
-
 override() {
 	local -n level=${1}_override_level
 	cpfx ${1} ${1}_override_$((level++))
@@ -1990,39 +2018,11 @@ envinfo() {
 	echo "RAM: $(printf %.1fG $size)"
 }
 
-name() { echo ${name:-$(basename "$0" .sh)}; }
-
-protocol() { echo "0"; }
-
-version() { echo "2024-11-28"; }
-
-check_protocol() {
-	local protocol=$1
-	local version=$2
-	[[ $protocol == 0 ]] || return 1
-	[[ $version =~ ^([0-9][0-9][0-9][0-9])-?([0-9][0-9])-?([0-9][0-9]) ]] || return 2
-	(( $(printf "%d%d%d" ${BASH_REMATCH[@]:1}) >= 20240630 )) 2>/dev/null || return 2
-	return 0
-}
-
-log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
-
-init_log() {
-	logfile=${logfile:-$(name)_$(date '+%Y%m%d_%H%M%S_%3N').log}
-	if [ "$logfile" != /dev/null ] && exec 3>> "$logfile" && flock -xn 3; then
-		override cleanup
-		cleanup() { invoke_overridden cleanup; flock -u 3 2>/dev/null; }
-		exec 2> >(trap '' INT TERM; exec tee /dev/fd/2 >&3)
-	elif [ "$(readlink /dev/fd/2)" == /dev/null ]; then
-		override log
-		log() { :; }
-		if [[ $aggressive_silence ]]; then
-			local fun
-			for fun in $(declare -F | cut -d' ' -f3); do
-				eval "$(declare -f $fun | sed -E 's/log\s"([^"]|\\"|"\s+")+"/:/g')"
-			done
-		fi
-	fi
+backtrace() {
+	local i
+	for (( i=1; i<${#FUNCNAME[@]}; i++ )); do
+		printf "#%d in %s() at %s:%s\n" $i ${FUNCNAME[$i]} ${BASH_SOURCE[$i]} ${BASH_LINENO[$i-1]}
+	done
 }
 
 #### script main ####
