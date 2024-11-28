@@ -645,20 +645,21 @@ handle_use_input() { # ^use (.+)$
 	if [[ $options =~ ^protocol\ ([^ ]+)(\ version\ ([^ ]+))?$|^version\ ([^ ]+)$ ]]; then
 		local protocol=${BASH_REMATCH[1]:-$(protocol)}
 		local version=${BASH_REMATCH[3]:-${BASH_REMATCH[4]:-$(version)}}
-
-		if [[ $protocol == 0 ]] && (( ${version//-/} >= 20240630 )) 2>/dev/null; then
-			echo "$who << accept $options"
+		check_protocol $protocol $version
+		case $? in
+		0)	echo "$who << accept $options"
 			log "accept use $options from $who"
-		elif [[ $protocol != 0 ]]; then
-			echo "$who << reject protocol $protocol"
+			;;
+		1)	echo "$who << reject protocol $protocol"
 			log "reject use protocol $protocol from $who, unsupported protocol"
-		elif [[ $version ]]; then
-			echo "$who << reject version $version"
+			;;
+		2)	echo "$who << reject version $version"
 			log "reject use version $version from $who, unsupported version"
-		else
-			echo "$who << reject $options"
+			;;
+		*)	echo "$who << reject $options"
 			log "reject use $options from $who"
-		fi
+			;;
+		esac
 	else
 		return 1
 	fi
@@ -1993,7 +1994,16 @@ name() { echo ${name:-$(basename "$0" .sh)}; }
 
 protocol() { echo "0"; }
 
-version() { echo "2024-06-30"; }
+version() { echo "2024-11-28"; }
+
+check_protocol() {
+	local protocol=$1
+	local version=$2
+	[[ $protocol == 0 ]] || return 1
+	[[ $version =~ ^([0-9][0-9][0-9][0-9])-?([0-9][0-9])-?([0-9][0-9]) ]] || return 2
+	(( $(printf "%d%d%d" ${BASH_REMATCH[@]:1}) >= 20240630 )) 2>/dev/null || return 2
+	return 0
+}
 
 log() { echo "$(date '+%Y-%m-%d %H:%M:%S.%3N') $@" >&2; }
 
