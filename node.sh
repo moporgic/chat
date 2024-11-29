@@ -1736,12 +1736,12 @@ init_system_io() {
 	trap 'log "$(name) has been terminated, backtrace:"; backtrace | xargs_eval log"; exit 64' TERM
 	trap 'code=$?; cleanup; log "$(name) is terminated"; exit $code' EXIT
 
-	local endpoint=$(printf "%s\n" "$addr:$port" "${configs[@]}" | grep -E "^([^:=]+):([0-9]+)$")
-	local addr port; IFS=: read -r addr port <<< $endpoint
-	if [[ $addr ]] && [[ $port ]]; then
-		log "connect to chat system at $addr:$port..."
-		while ! { exec {tcp_fd}<>/dev/tcp/$addr/$port; } 2>/dev/null; do
-			log "failed to connect $addr:$port, host down?"
+	local endpoint=$(printf "%s\n" "$chat" "$host:$port" "${configs[@]}" | grep -E "^([^:=]+):([0-9]+)$")
+	local host port; IFS=: read -r host port <<< $endpoint
+	if [[ $host ]] && [[ $port ]]; then
+		log "connect to chat system at $host:$port..."
+		while ! { exec {tcp_fd}<>/dev/tcp/$host/$port; } 2>/dev/null; do
+			log "failed to connect $host:$port, host down?"
 			local io_count=${io_count:-0}
 			if (( $((++io_count)) >= ${max_io_count:-65536} )); then
 				log "max number of connections is reached"
